@@ -1,9 +1,15 @@
 # LDSO_Twitch
 Repository for twitch livestream where I dissect the LDSO for educational purpose
 
-The livestream will be done via Twitch.tv, check my channel here: https://www.twitch.tv/langwassertv
+# Livestream and Videos
 
-The livestream will also be recorded and uploaded to Youtube, check my channel there: https://www.youtube.com/playlist?list=PLj0MGqAFBYgxYiZJezHSP7XiTwLiXgo9R
+The livestream will be done via Twitch.tv, eventually recorded and uploaded to Youtube, here are the links to my channels: 
+
+| Channel  | URL             |
+| ----- | ----------------- |
+| Twitch | https://www.twitch.tv/langwassertv |
+| Youtube (Playlist) | https://www.youtube.com/playlist?list=PLj0MGqAFBYgxYiZJezHSP7XiTwLiXgo9R |
+
 
 # Dependencies / License
 
