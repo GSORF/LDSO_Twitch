@@ -1,3 +1,7 @@
+# Exclude folders created by building
+bin/
+build/
+
 # Prerequisites
 *.d
 
