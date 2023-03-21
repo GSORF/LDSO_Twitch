@@ -13,11 +13,11 @@
 // Our own includes
 #include "Settings.h"
 /// TODO: #include "frontend/Undistort.h"
-/// TODO: #include "frontend/ImageRW.h"
-/// TODO: #include "frontend/ImageAndExposure.h"
+#include "frontend/ImageRW.h"
+#include "frontend/ImageAndExposure.h"
 
-/// TODO: #include "internal/GlobalFuncs.h"
-/// TODO: #include "internal/GlobalCalib.h"
+#include "internal/GlobalFuncs.h"
+#include "internal/GlobalCalib.h"
 
 #if HAS_ZIPLIB
 
@@ -30,7 +30,7 @@
 using namespace std;
 
 using namespace ldso;
-/// TODO: using namespace ldso::internal;
+using namespace ldso::internal;
 
 
 // Helper functions for accessing file system
@@ -80,12 +80,10 @@ inline int getdir(std::string dir, std::vector<std::string> &files)
 
 }
 
-struct PreImageItem {
+struct PrepImageItem {
     int id;
     bool isQueud;
 
-    /// TODO:
-    /*
     ImageAndExposure *pt;
 
     inline PrepImageItem(int _id)
@@ -102,7 +100,6 @@ struct PreImageItem {
         }
         pt = 0;
     }
-    */
 };
 
 class ImageFolderReader {
@@ -228,14 +225,15 @@ public:
     }
     */
 
-    /// TODO: 
-    /*
     void getCalibMono(Eigen::Matrix3f &K, int &w, int &h)
     {
+        /// TODO: 
+        /*
         
         K = undistort->getK().cast<float>();
         w = undistort->getSize()[0];
         h = undistort->getSize()[1];
+        */
         
     }
 
@@ -246,7 +244,7 @@ public:
         getCalibMono(K, w_out, h_out);
         setGlobalCalib(w_out, h_out, K);
     }
-    */
+    
 
     int getNumImages()
     {
@@ -275,8 +273,6 @@ public:
         /// TODO: Empty in original codebase
     }
 
-    /// TODO:
-    /*
     MinimalImageB *getImageRaw(int id)
     {
         return getImageRaw_internal(id, 0);
@@ -286,7 +282,6 @@ public:
     {
         return getImage_internal(id, 0);
     }
-    */
 
     inline float *getPhotometricGamma()
     {
@@ -305,8 +300,7 @@ public:
 
 private:
 
-    /// TODO:
-    /*
+    
     MinimalImageB *getImageRaw_internal(int id, int unused)
     {
         if(!isZipped)
@@ -351,18 +345,19 @@ private:
         }
     }
 
-
     ImageAndExposure *getImage_internal(int id, int unused)
     {
+     /// TODO:
+    /*
+     */
         MinimalImageB *minimg = getImageRaw_internal(id, 0);
-        ImageAndExposure *imgexp = undistort->undistort<unsigned char>(minimg, 
+        ImageAndExposure *imgexp = nullptr; /* /// TODO:  undistort->undistort<unsigned char>(minimg, 
                                                     (exposure.size() == 0 ? 1.0f : exposures[id]),
-                                                    (timestamps.size() == 0 ? 0.0f : timestamps[id]));
+                                                    (timestamps.size() == 0 ? 0.0f : timestamps[id])); */
         delete minimg;
         return imgexp;
 
     }
-    */
 
     inline void loadTimestampsEUROC()
     {
@@ -542,7 +537,7 @@ private:
 
     }
 
-    /// TODO: std::vector<ImageAndExposure *> preloadedImages;
+    std::vector<ImageAndExposure *> preloadedImages;
     std::vector<std::string> files;
     std::vector<double> timestamps;
     std::vector<float> exposures;

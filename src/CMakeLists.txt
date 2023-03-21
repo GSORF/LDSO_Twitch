@@ -3,6 +3,10 @@ add_library(ldso_twitch
     # ...
     Feature.cc
     Settings.cc
+
+    internal/GlobalCalib.cc
+
+    frontend/ImageRW_OpenCV.cc
 )
 
 target_link_libraries(

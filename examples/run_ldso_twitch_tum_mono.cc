@@ -354,7 +354,7 @@ int main(int argc, char **argv)
 
     shared_ptr<ImageFolderReader> reader(new ImageFolderReader(ImageFolderReader::TUM_MONO, source, calib, gammaCalib, vignette));
     
-    // TODO: reader->setGlobalCalibration();
+    reader->setGlobalCalibration();
 
     
     if(setting_photometricCalibration > 0 && reader->getPhotometricGamma() == 0)

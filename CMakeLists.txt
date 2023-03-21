@@ -31,7 +31,7 @@ find_package(Glog REQUIRED)
 find_package(Pangolin REQUIRED)
 
 # optional libraries
-find_package(LIBZIP QUIET)
+find_package(LibZip QUIET)
 
 # Set additional compiler flags
 set(CMAKE_CXX_FLAGS "-Wall -Wno-deprecated -march=native -Wno-duplicate-decl-specifier -Wno-ignored-qualifiers -Wno-reorder -Wno-missing-braces")
