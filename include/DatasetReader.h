@@ -12,7 +12,7 @@
 
 // Our own includes
 #include "Settings.h"
-/// TODO: #include "frontend/Undistort.h"
+#include "frontend/Undistort.h"
 #include "frontend/ImageRW.h"
 #include "frontend/ImageAndExposure.h"
 
@@ -168,15 +168,13 @@ public:
             }
         }
 
-        /// TODO: undistort = Undistort::getUndistorterForFile(calibFile, gammaFile, vignetteFile);
+        undistort = Undistort::getUndistorterForFile(calibFile, gammaFile, vignetteFile);
 
-        /// TODO: 
-        /*
+        
         widthOrg = undistort->getOriginalSize()[0];
         heightOrg = undistort->getOriginalSize()[1];
         width = undistort->getSize()[0];
         height = undistort->getSize()[1];
-        */
 
         // load the timestamps if possible.
         if(datasetType == TUM_MONO)
@@ -206,13 +204,12 @@ public:
             delete databuffer;
         }
 #endif
-        /// TODO: delete undistort;
+        delete undistort;
     };
 
     // Helper methods
 
-    /// TODO: 
-    /*
+    
     Eigen::VectorXf getOriginalCalib()
     {
         return undistort->getOriginalParameter().cast<float>();
@@ -223,18 +220,12 @@ public:
     {
         return undistort->getOriginalSize();
     }
-    */
 
     void getCalibMono(Eigen::Matrix3f &K, int &w, int &h)
     {
-        /// TODO: 
-        /*
-        
         K = undistort->getK().cast<float>();
         w = undistort->getSize()[0];
         h = undistort->getSize()[1];
-        */
-        
     }
 
     void setGlobalCalibration()
@@ -251,7 +242,7 @@ public:
         return files.size();
     }
 
-    double getTimestamps(int id)
+    double getTimestamp(int id)
     {
         if(timestamps.size() == 0)
         {
@@ -285,18 +276,15 @@ public:
 
     inline float *getPhotometricGamma()
     {
-        /// TODO:
-        /*
+        // Check if geometric and photometric undistorters are uninitialized
         if(undistort == 0 || undistort->photometricUndist == 0)
         {
             return 0;
         }
         return undistort->photometricUndist->getG(); // Return Gamma
-        */
-       return 0;
     }
 
-    /// TODO: Undistort *undistort;
+    Undistort *undistort;
 
 private:
 
@@ -347,13 +335,10 @@ private:
 
     ImageAndExposure *getImage_internal(int id, int unused)
     {
-     /// TODO:
-    /*
-     */
         MinimalImageB *minimg = getImageRaw_internal(id, 0);
-        ImageAndExposure *imgexp = nullptr; /* /// TODO:  undistort->undistort<unsigned char>(minimg, 
-                                                    (exposure.size() == 0 ? 1.0f : exposures[id]),
-                                                    (timestamps.size() == 0 ? 0.0f : timestamps[id])); */
+        ImageAndExposure *imgexp = undistort->undistort<unsigned char>(minimg, 
+                                                    (exposures.size() == 0 ? 1.0f : exposures[id]),
+                                                    (timestamps.size() == 0 ? 0.0f : timestamps[id]));
         delete minimg;
         return imgexp;
 
@@ -556,9 +541,6 @@ private:
     char *databuffer;
 #endif
 };
-
-
-
 
 
 #endif // LDSO_TWITCH_DATASET_READER_H_

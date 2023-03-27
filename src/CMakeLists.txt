@@ -6,7 +6,9 @@ add_library(ldso_twitch
 
     internal/GlobalCalib.cc
 
+    frontend/Undistort.cc
     frontend/ImageRW_OpenCV.cc
+
 )
 
 target_link_libraries(

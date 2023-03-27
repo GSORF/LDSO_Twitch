@@ -328,6 +328,7 @@ int main(int argc, char **argv)
 {
 
     FLAGS_colorlogtostderr = true;
+    /// TODO: Add InitGoogleLogging();
 
     // Parsing the arguments:
     for (int i = 1; i < argc; i++)
@@ -372,20 +373,27 @@ int main(int argc, char **argv)
     {
         LOG(INFO) << "REVERSE!!!!";
         lstart = endIdx - 1;
-        /* TODO: 
         if(lstart >= reader->getNumImages())
         {
             lstart = reader->getNumImages() - 1;
         }
-        */
         lend = startIdx;
         linc = -1;
     }
 
     // Load the ORB-Vocabulary (used for loop closure):
-    /* TODO:
     shared_ptr<ORBVocabulary> voc(new ORBVocabulary());
     voc->load(vocPath);
+
+    // Custom check if Vocabulary was loaded successfully:
+    int vocNumberOfWords = voc->size();
+    if(vocNumberOfWords > 0)
+    {
+        std::cout << "ORB Vocabulary has " << vocNumberOfWords << " words in the vocabulary!" << std::endl;
+    }
+
+
+    /* TODO:
     */
     
     // Initialize the "FullSystem" which is the core of our VSLAM (Visual Simultaneous Localization And Mapping):
@@ -415,7 +423,6 @@ int main(int argc, char **argv)
         std::vector<double> timesToPlayAt;
 
         // Prepare the correct timestamps for each image:
-        /* TODO: 
         for (int i = lstart; i >= 0 && i < reader->getNumImages() && linc * i < linc * lend; i+= linc)
         {
             idsToPlay.push_back(i);
@@ -431,10 +438,8 @@ int main(int argc, char **argv)
                 timesToPlayAt.push_back(timesToPlayAt.back() + fabs(tsThis - tsPrev) / playbackSpeed);
             }
         }
-        */
         
         // Load all the images we need in a data structure in our memory
-        /* TODO: 
         std::vector<ImageAndExposure *> preloadedImages;
         if(preload)
         {
@@ -445,7 +450,6 @@ int main(int argc, char **argv)
                 preloadedImages.push_back(reader->getImage(i));
             }
         }
-        */
 
 
         // Start a stop watch in order to measure performance on a dataset:
@@ -474,7 +478,6 @@ int main(int argc, char **argv)
 
             int i = idsToPlay[ii];
 
-            /* TODO:
             ImageAndExposure *img; // The main datatype for an image
             if(preload)
             {
@@ -484,7 +487,6 @@ int main(int argc, char **argv)
             {
                 img = reader->getImage(i);
             }
-            */
 
             bool skipFrame = false;
             if(playbackSpeed != 0)
@@ -510,7 +512,7 @@ int main(int argc, char **argv)
                 // Here the "real nice magic" is happening! 
                 /// TODO: fullSystem->addActiveFrame(img, i);
             }
-            /// TODO: delete img;
+            delete img;
 
             // Cleaning up
             /* TODO: 
@@ -555,9 +557,8 @@ int main(int argc, char **argv)
         /// TODO: fullSystem->printResult(output_file + ".noloop", false);
 
 
-        /* TODO: (SegmentationFault)
         int numFramesProcessed = abs(idsToPlay[0] - idsToPlay.back());
-        double numSecondsProcessed = 1234.0; // TODO: fabs(reader->getTimestamp(idsToPlay[0]) - reader->getTimestamp(idsToPlay.back()));
+        double numSecondsProcessed = fabs(reader->getTimestamp(idsToPlay[0]) - reader->getTimestamp(idsToPlay.back()));
         double MilliSecondsTakenSingle = 1000.0f * (ended - started) / (float) (CLOCKS_PER_SEC);
         double MilliSecondsTakenMT = sInitializerOffset + ((tv_end.tv_sec - tv_start.tv_sec) * 1000.0f + (tv_end.tv_usec - tv_start.tv_usec) / 1000.0f);
 
@@ -568,9 +569,11 @@ int main(int argc, char **argv)
         << endl << 1000 / (MilliSecondsTakenSingle / numFramesProcessed) << "x (single core);" 
         << endl << 1000 / (MilliSecondsTakenMT / numFramesProcessed) << "x (multi core);" 
         << endl << "===============" << endl;
+        /* TODO: (SegmentationFault)
         */
 
         /* TODO: 
+        */
         if(setting_logStuff)
         {
             std::ofstream tmlog;
@@ -580,7 +583,7 @@ int main(int argc, char **argv)
             tmlog.flush();
             tmlog.close();
         }
-        */
+        
 
 
     });
