@@ -15,19 +15,17 @@
 // #include "frontend/FullSystem.h"
 #include "DatasetReader.h"
 
-
-
 // TODO: create global variables
 using namespace std;
 using namespace ldso;
 
-std::string vignette = "../VSLAM_Datasets/sequence_45/vignette.png";
-std::string gammaCalib = "../VSLAM_Datasets/sequence_45/pcalib.txt"; // photometric calibration
-std::string calib = "../VSLAM_Datasets/sequence_45/camera.txt"; // geometric calibration
-std::string source = "../VSLAM_Datasets/sequence_45/";
+std::string vignette = "../../../VSLAM_Datasets/sequence_45/vignette.png";
+std::string gammaCalib = "../../../VSLAM_Datasets/sequence_45/pcalib.txt"; // photometric calibration
+std::string calib = "../../../VSLAM_Datasets/sequence_45/camera.txt"; // geometric calibration
+std::string source = "../../../VSLAM_Datasets/sequence_45/";
 
-std::string output_file = "./results.txt";
-std::string vocPath = "./vocab/orbvoc.dbow3";
+std::string output_file = "../results.txt";
+std::string vocPath = "../vocab/orbvoc.dbow3";
 
 double rescale = 1;
 bool reversePlay = false;
@@ -328,8 +326,8 @@ int main(int argc, char **argv)
 {
 
     FLAGS_colorlogtostderr = true;
-    /// TODO: Add InitGoogleLogging();
-
+    google::InitGoogleLogging(*argv);
+    
     // Parsing the arguments:
     for (int i = 1; i < argc; i++)
     {
@@ -339,7 +337,6 @@ int main(int argc, char **argv)
     }
 
     // Check setting conflicts
-
     if(setting_enableLoopClosing && (setting_pointSelection != 1))
     {
         LOG(ERROR) << "Loop closing is enabled but point selection strategy is not set to LDSO, use setting_pointSelection=1! please!" << endl;

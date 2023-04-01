@@ -1,4 +1,4 @@
-BUILD_TYPE=Release
+BUILD_TYPE=Debug
 NUM_PROC=4
 
 BASEDIR="$PWD"

@@ -17,9 +17,9 @@ using namespace std;
 #include "DBoW3/src/DBoW3.h"
 
 // Poses are represented as sophus structs
-typedef Sophus::SE3d SE3;
-typedef Sophus::SO3d SO3;
-typedef Sophus::Sim3d Sim3;
+typedef Sophus::SE3d SE3; // Rotation and Translation (Special Euclidean Group)
+typedef Sophus::SO3d SO3; // Only rotation (Special Orthogonal Group)
+typedef Sophus::Sim3d Sim3; // Rotation, Translation and Scale (Similarity Group)
 
 // Camera intrinsics: fx, fy, cx, cy (4 parameters)
 // note that the types below which have "C" means camera parameters
