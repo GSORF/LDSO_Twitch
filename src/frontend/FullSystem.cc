@@ -650,4 +650,529 @@ namespace ldso
         }
         LOG(INFO) << "make keyframe done" << endl;
     }
+
+    void FullSystem::makeNonKeyFrame(shared_ptr<FrameHessian> &fh)
+    {
+        {
+            unique_lock<mutex> crlock(shellPoseMutex);
+            fh->setEvalPT_scaled(fh->frame->getPose(), fh->frame->aff_g2l);
+        }
+        traceNewCoarse(fh);
+        fh->frame->ReleaseAll(); // no longer needs it
+    }
+
+    void FullSystem::marginalizeFrame(shared_ptr<Frame> &frame)
+    {
+        // marginalize or remove all this frames points
+        ef->marginalizeFrame(frame->frameHessian);
+
+        // drop all observations of existing points in that frame
+        for (shared_ptr<Frame> &fr: frames)
+        {
+            if(fr == frame)
+            {
+                continue;
+            }
+
+            for (auto feat: fr->features)
+            {
+                if(feat->status == Feature::FeatureStatus::VALID && feat->point->status == Point::PointStatus::ACTIVE)
+                {
+                    // If feature is VALID and Point is ACTIVE:
+                    shared_ptr<PointHessian> ph = feat->point->mpPH;
+
+                    // remove the residuals projected into this frame
+                    size_t n = ph->residuals.size();
+                    for (size_t i = 0; i < n; i++)
+                    {
+                        auto r = ph->residuals[i]; // residual
+                        if(r->target.lock() == frame->frameHessian)
+                        {
+                            if(ph->lastResiduals[0].first == r)
+                            {
+                                ph->lastResiduals[0].first = nullptr;
+                            }
+                            else if(ph->lastResiduals[1].first == r)
+                            {
+                                ph->lastResiduals[1].first = nullptr;
+                            }
+                            ef->dropResidual(r);
+                            i--; // Current residual id
+                            n--; // Total number of residuals
+                        }
+                    }
+                }
+            }
+        }
+
+        // remove this frame from recorded frames
+        frame->ReleaseAll(); // release all things in this frame
+        deleteOutOrder<shared_ptr<Frame>>(frames, frame);
+
+        // reset the optimization idx
+        for (unsigned int i = 0; i < frames.size(); i++)
+        {
+            frames[i]->frameHessian->idx = i;
+        }
+
+        setPrecalcValues();
+        ef->setAdjointsF(Hcalib->mpCH);
+    }
+
+    void FullSystem::flagFramesForMarginalization(shared_ptr<FrameHessian> &newFH)
+    {
+        // Loop through all frames outside of sliding window and mark them as ready for marginalization
+        if(setting_minFrameAge > setting_maxFrames)
+        {
+            for (size_t i = setting_maxFrames; i < frames.size(); i++)
+            {
+                shared_ptr<FrameHessian> &fh = frames[i - setting_maxFrames]->frameHessian;
+                LOG(INFO) << "frame " << fh->frame->kfId << " is set as marged" << std::endl;
+                fh->flaggedForMarginalization = true;
+            }
+            return;            
+        }
+
+        int flagged = 0;
+
+        // marginalize all frames that have not enough points.
+        for (int i = 0; i < (int) frames.size(); i++)
+        {
+            shared_ptr<FrameHessian> &fh = frames[i]->frameHessian;
+            int in = 0, out = 0;
+            for (auto &feat: frames[i]->features)
+            {
+                if(feat->status == Feature::FeatureStatus::IMMATURE)
+                {
+                    in++;
+                    continue;
+                }
+
+                shared_ptr<Point> p = feat->point;
+                if(p && p->status == Point::PointStatus::ACTIVE)
+                {
+                    in++;
+                }
+                else
+                {
+                    out++;
+                }
+                
+            }
+
+            Vec2 refToFh = AffLight::fromToVecExposure(frames.back()->frameHessian->ab_exposure, fh->ab_exposure, frames.back()->frameHessian->aff_g2l(), fh->aff_g2l());
+            // Result:
+            // refToFh[0] = ab_exposure
+            // refToFh[1] = aff_g2l
+
+            // some kind of marginalization conditions
+            if( (in < setting_minPointsRemaining * (in + out) || 
+                 fabs(logf((float) refToFh[0])) > setting_maxLogAffFacInWindow) &&
+                 ((int) frames.size()) - flagged > setting_minFrames)
+            {
+                LOG(INFO) << "frame " << fh->frame->kfId << " is set as marged" << std::endl;
+                fh->flaggedForMarginalization = true;
+                flagged++;
+            }
+        }
+
+        // still too much (frames?), marginalize one
+        if((int) frames.size() - flagged >= setting_maxFrames)
+        {
+            double smallestScore = 1;
+            shared_ptr<Frame> toMarginalize = nullptr;
+            shared_ptr<Frame> latest = frames.back();
+
+            for (auto &fr: frames)
+            {
+                // Check for a minimum age of the current frame OR first frame
+                if(fr->frameHessian->frameID > latest->frameHessian->frameID - setting_minFrameAge
+                || fr->frameHessian->frameID == 0)
+                {
+                    continue;
+                }
+                double distScore = 0;
+                for (FrameFramePrecalc &ffh : fr->frameHessian->targetPrecalc)
+                {
+                    // Check for minimum age of current frame OR if target==host
+                    if(ffh.target.lock()->frameID > latest->frameHessian->frameID - setting_minFrameAge + 1
+                    || ffh.target.lock() == ffh.host.lock())
+                    {
+                        continue
+                    }
+                    distScore += 1 / (1e-5 + ffh.distanceLL);
+                }
+                distScore *= -sqrtf(fr->frameHessian->targetPrecalc.back().distanceLL);
+
+                if(distScore < smallestScore)
+                {
+                    smallestScore = distScore; // Update the smallest score
+                    toMarginalize = fr; // Update frame that needs to be marginalized
+                }
+            }
+
+            if(toMarginalize)
+            {
+                toMarginalize->frameHessian->flaggedForMaginalization = true;
+                LOG(INFO) << "frame " << toMarginalize->kfId << " is set as marged" << std::endl;
+                flagged++;
+            }
+        }
+    }
+
+    float FullSystem::optimize(int mnumOptIts)
+    {
+        if(frames.size() < 2)
+        {
+            return 0;
+        }
+        if(frames.size() < 3)
+        {
+            mnumOptIts = 20;
+        }
+        if(frames.size() < 4)
+        {
+            mnumOptIts = 15;
+        }
+
+        // get statistics and active residuals.
+        activeResiduals.clear();
+        int numPoints = 0;
+        int numLRes = 0;
+
+        for (shared_ptr<Frame> &fr : frames)
+        {
+            for(auto &feat: fr->features)
+            {
+                shared_ptr<Point> p = feat->point;
+                // Check for VALID feature and SET + ACTIVE point:
+                if(feat->status == Feature::FeatureStatus::VALID && p && p->status == Point::PointStatus::ACTIVE)
+                {
+                    auto ph = p->mpPH;
+                    for (auto &r : ph->residuals)
+                    {
+                        if(!r->isLinearized)
+                        {
+                            activeResiduals.push_back(r);
+                            r->resetOOB(); // OOB: Out Of Bounds
+                        }
+                        else
+                        {
+                            numLRes++;
+                        }
+                    }
+                }
+                numPoints++
+            }
+        }
+
+        LOG(INFO) << "active residuals: " << activeResiduals.size() << std::endl;
+
+        Vec3 lastEnergy = linearizeAll(false);
+        double lastEnergyL = calcLEnergy();
+        double lastEnergyM = calcMEnergy();
+
+        // apply res(idual?)
+        if(multiThreading)
+        {
+            // ldso::internal::IndexThreadReduce<Vec10>::reduce(std::function<void (int, int, Vec10 *, int)> callPerIndex, int first, int end, int stepSize)
+            // -> first=0, end=activeResiduals.size(), stepSize=50
+            threadReduce.reduce(bind(&FullSystem::applyRes_Reductor, this, true, _1, _2, _3, _4),0, activeResiduals.size(), 50);
+
+        }
+        else
+        {
+            applyRes_Reductor(true, 0, activeResiduals.size(), 0, 0);
+        }
+
+        printOptRes(lastEnergy, lastEnergyL, lastEnergyM, 0, 0, frames.back()->frameHessian->aff_g2l().a,frames.back()->frameHessian->aff_g2l().b);
+
+        double lambda = 1e-1;
+        float stepsize = 1;
+        VecX previousX = VecX::Constant(CPARS + 8 * frames.size(), NAN);
+
+        for (int iteration = 0; iteration < mnumOptIts; iteration++)
+        {
+            // Solve!
+            backupState(iteration != 0);
+
+            solveSystem(iteration, lambda);
+            double incDirChange = (1e-20 + previousX.dot(ef->lastX)) / (1e-20 + previousX.norm() * ef->lastX.norm());
+            previousX = ef->lastX;
+
+            // Check for finite direction magnitude and set solver to "Step Momentum":
+            if(std::isfinite(incDirChange) && (setting_solverMode & SOLVER_STEPMOMENTUM))
+            {
+                float newStepsize = exp(incDirChange * 1.4);
+                if(incDirChange < 0 && stepsize > 1)
+                {
+                    stepsize = 1;
+                }
+                stepsize = sqrtf(sqrtf(newStepsize * stepsize * stepsize * stepsize ));
+
+                // Check the bounds of stepsize to be in [0.25, ... , 2.0]:
+                if(stepsize > 2)
+                {
+                    stepsize = 2;
+                }
+                if(stepsize < 0.25)
+                {
+                    stepsize = 0.25;
+                }
+            }
+            bool canbreak = doStepFromBackup(stepsize,stepsize,stepsize,stepsize,stepsize);
+
+            // eval new energy!
+            Vec3 newEnergy = linearizeAll(false);
+            double newEnergyL = calcLEnergy();
+            double newEnergyM = calcMEnergy();
+
+            printOptRes(newEnergy, newEnergyL, newEnergyM, 0, 0, frames.back()->frameHessian->aff_g2l().a,frames.back()->frameHessian->aff_g2l().b);
+
+            // control the lambda in LM (Levenberg-Marquardt)
+            if(setting_forceAceptStep || (newEnergy[0] + newEnergy[1] + newEnergyL + newEnergyM < lastEnergy[0] + lastEnergy[1] + lastEnergyL + lastEnergyM))
+            {
+                // energy is decreasing
+                if(multiThreading)
+                {
+                    threadReduce.reduce(bind(&FullSystem::applyRes_Reductor, this, true, _1, _2, _3, _4),0, activeResiduals.size(), 50);
+                }
+                else
+                {
+                    applyRes_Reductor(true, 0, activeResiduals.size(), 0, 0);
+                }
+
+                lastEnergy = newEnergy;
+                lastEnergyL = newEnergyL;
+                lastEnergyM = newEnergyM;
+
+                lambda *= 0.25;
+            }
+            else
+            {
+                // energy increases, reload the backup state and increase lambda
+                loadSateBackup();
+                lastEnergy = linearizeAll(false);
+                lastEnergyL = calcLEnergy();
+                lastEnergyM = calcMEnergy();
+                lambda *= 1e2; // lambda = lambda * 10*10 = lambda * 100
+            }
+
+            if(canbreak && iteration >= setting_minOptIterations)
+            {
+                break;
+            }
+        }
+
+        Vec10 newStateZero = Vec10::Zero();
+        newStateZero.segment<2>(6) = frames.back()->frameHessian->get_state().segment<2>(6);
+
+        frames.back()->frameHessian->setEvalPT(frames.back()->frameHessian->PRE_worldToCam, newStateZero);
+
+        EFDeltaValid = false;
+        EFAdjointsValid = false;
+        ef->setAdjointsF(Hcalib->mpCH);
+        setPrecalcValues();
+
+        lastEnergy = linearizeAll(true); // fix all the linearizations;
+
+        if(!std::isfinite((double) lastEnergy[0]) 
+        || !std::isfinite((double) lastEnergy[1]) 
+        || !std::isfinite((double) lastEnergy[2]) )
+        {
+            LOG(WARNING) << "KF Tracking failed: LOST!";
+            isLost = true;
+        }
+
+        // set the estimated pose into frame
+        {
+            unique_lock<mutex> crlock(shellPoseMutex);
+            for (auto fr: frames)
+            {
+                fr->setPose(fr->frameHessian->PRE_camToWorld.inverse());
+                if(fr->kfId >= globalMap->getLatestOptimizedKfId())
+                {
+                    fr->setPoseOpti(Sim3(fr->getPose().matrix()));
+                }
+                fr->aff_g2l = fr->frameHessian->aff_g2l();
+            }
+        }
+
+        return sqrtf((float) (lastEnergy[0] / (patternNum * ef->resInA)));
+    }
+
+    void FullSystem::setGammaFunction(float *BInv)
+    {
+        if(BInv == nullptr)
+        {
+            return;
+        }
+
+        // copy BInv
+        memcpy(Hcalib->mpCH->Binv, BInv, sizeof(float) * 256);
+
+        // invert
+        for (int i = 0; i < 255; i++)
+        {
+            // find val, such that Binv[val] = i.
+            // I dont care about speed for this, so do it the stupid way.
+
+            for (int s = 1; s < 255; s++)
+            {
+                if(BInv[s] <= i && BInv[s+1] >= i)
+                {
+                    Hcalib->mpCH->B[i] = s + (i - BInv[s]) / (BInv[s + 1] - BInv[s]);
+                    break;
+                }
+            }
+        }
+
+        // Update the limits of Hcalib - avoid imprecise values:
+        Hcalib->mpCH->B[0] = 0;
+        Hcalib->mpCH->B[255] = 255;
+    }
+
+    shared_ptr<PointHessian> FullSystem::optimizeImmaturePoint(shared_ptr<internal::ImmaturePoint> point, int minObs, vector<shared_ptr<ImmaturePointTemporaryResidual>> &residuals)
+    {
+        int nres = 0;
+        shared_ptr<Frame> hostFrame = point->feature->host.lock();
+        assert(hostFrame); // the feature should have a host frame
+
+        for (auto fr: frames)
+        {
+            if(fr != hostFrame)
+            {
+                residuals[nres]->state_NewEnergy = residuals[nres]->state_energy = 0;
+                residuals[nres]->state_NewState = ResState::OUTLIER;
+                residuals[nres]->state_state = ResState::IN;
+                residuals[nres]->target = fr->frameHessian;
+                nres++
+            }
+        }
+        assert(nres == frames.size() - 1);
+
+        float lastEnergy = 0;
+        float lastHdd = 0;
+        float lastbd = 0;
+        float currentIdepth = (point->idepth_max + point->idepth_min) * 0.5f;
+
+        for(int i = 0; i < nres; i++)
+        {
+            lastEnergy += point->linearizeResidual(Hcalib->mpCH, 1000, residuals[i], lastHdd, lastbd, currentIdepth);
+            residuals[i]->state_state = residuals[i]->state_NewState;
+            residuals[i]->state_energy = residuals[i]->state_NewEnergy;
+        }
+
+        if(!std::isfinite(lastEnergy) || lastHdd < setting_minIdepthH_act)
+        {
+            return 0; /// TODO: maybe better return nullptr?
+        }
+
+        // do LM iteration for this immature point
+        float lambda = 0.1;
+        for (int iteration = 0; iteration < setting_GNItsOnPointActivation; iteration++)
+        {
+            float H = lastHdd;
+            H *= 1 + lambda;
+
+            float step = (1.0 / H) * lastbd;
+            float newIdepth = currentIdepth - step;
+
+            float newHdd = 0;
+            float newbd = 0;
+            float newEnergy = 0;
+
+            for (int i = 0; i < nres; i++)
+            {
+                // compute the energy in other frames
+                newEnergy += point->linearizeResidual(Hcalib->mpCH, 1, residuals[i], newHdd, newbd, newIdepth);
+
+            }
+            
+            /// STD IS FINITE
+            if(!std::isfinite(lastEnergy) || lastHdd < setting_minIdepthH_act)
+            {
+                return 0; /// TODO: maybe better return nullptr?
+            }
+
+
+            // Check if the energy is decreasing
+            if(newEnergy < lastEnergy)
+            {
+                // we are improving during our optimization
+                currentIdepth = newIdepth;
+                lastHdd = newHdd;
+                lastbd = newbd;
+                lastEnergy = newEnergy;
+                for (int i = 0; i < nres; i++)
+                {
+                    residuals[i]->state_state = residuals[i]->state_NewState;
+                    residuals[i]->state_energy = residuals[i]->state_NewEnergy;
+                }
+                lambda *= 0.5;
+            }
+            else
+            {
+                // we are not improving during the optimization
+                lambda *= 5;
+            }
+
+            if(fabsf(step) < 0.0001 * currentIdepth)
+            {
+                break;
+            }
+        }
+
+        if(!std::isfinite(currentIdepth))
+        {
+            return nullptr;
+        }
+
+        int numGoodRes = 0;
+        for(int i = 0; i < nres; i++)
+        {
+            if(residuals[i]->state_state == ResState::IN)
+            {
+                numGoodRes++;
+            }
+        }
+
+        if(numGoodRes < minObs)
+        {
+            // an outlier
+            return nullptr;
+        }
+
+        point->feature->CreateFromImmature(); // create a point from immature feature
+        shared_ptr<PointHessian> p = point->feature->point->mpPH;
+
+        // set residual status in new map point
+        p->lastResiduals[0].first = nullptr;
+        p->lastResiduals[0].second = ResState::OOB;
+        p->lastResiduals[1].first = nullptr;
+        p->lastResiduals[1].second = ResState::OOB;
+        
+        p->setIdepthZero(currentIdepth);
+        p->setIdepth(currentIdepth);
+
+        // move the immature point residuals into the new map point
+        for (int i = 0; i < nres; i++)
+        {
+            if(residuals[i]->state_state == ResState::IN)
+            {
+                shared_ptr<FrameHessian> host = point->feature->host.lock()->frameHessian;
+                shared_ptr<FrameHessian> target = residuals[i]->target.lock();
+                shared_ptr<PointFrameResidual> r(new PointFrameResidual(p, host, target));
+            }
+        }
+        
+
+
+
+        
+
+
+        
+    }
+
 }
