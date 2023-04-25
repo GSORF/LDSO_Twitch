@@ -1163,16 +1163,1206 @@ namespace ldso
                 shared_ptr<FrameHessian> host = point->feature->host.lock()->frameHessian;
                 shared_ptr<FrameHessian> target = residuals[i]->target.lock();
                 shared_ptr<PointFrameResidual> r(new PointFrameResidual(p, host, target));
+
+                r->state_NewEnergy = r->state_energy = 0;
+                r->state_NewState = ResState::OUTLIER;
+                r->setState(ResState::IN);
+                
+                p->residuals.push_back(r);
+
+                if(target == frames.back()->frameHessian)
+                {
+                    p->lastResiduals[0].first = r;
+                    p->lastResiduals[0].second = ResState::IN;
+                }
+                else if(target == (frames.size() < 2 ? nullptr : frames[frames.size() - 2]->frameHessian))
+                {
+                    p->lastResiduals[1].first = r;
+                    p->lastResiduals[1].second = ResState::IN;
+                }
             }
         }
+        return p;
+    }
+
+    void FullSystem::traceNewCoarse(shared_ptr<FrameHessian> fh)
+    {
+        unique_lock<mutex> lock(mapMutex);
+
+        int trace_total = 0, trace_good = 0, trace_oob = 0, trace_out = 0, trace_skip = 0, trace_badcondition = 0, trace_uninitialized = 0;
+
+        Mat33f K = Mat33f::Identity();
+        K(0, 0) = Hcalib->mpCH->fxl();
+        K(1, 1) = Hcalib->mpCH->fyl();
+        K(0, 2) = Hcalib->mpCH->cxl();
+        K(1, 2) = Hcalib->mpCH->cyl();
+
+        for (shared_ptr<Frame> fr : frames)
+        {
+            shared_ptr<FrameHessian> host = fr->frameHessian;
+
+            SE3 hostToNew = fh->PRE_worldToCam * host->PRE_camToWorld;
+            Mat33f KRKi = K * hostToNew.rotationMatrix().cast<float>() * K.inverse();
+            Vec3f Kt = K * hostToNew.translation().cast<float>();
+
+            Vec2f aff = AffLight::fromToVecExposure(host->ab_exposure, fh->ab_exposure, host->aff_g2l(), fh->aff_g2l()).cast<float>();
+
+            for (auto feat: fr->features)
+            {
+                if (feat->status == Feature::FeatureStatus::IMMATURE && feat->ip)
+                {
+                    // update the immature points
+                    shared_ptr<ImmaturePoint> ph = feat->ip;
+                    ph->traceOn(fh, KRKi, Kt, aff, Hcalib->mpCH);
+
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_GOOD)
+                    {
+                        trace_good++;
+                    }
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_BADCONDITION)
+                    {
+                        trace_badcondition++;
+                    }
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_OOB)
+                    {
+                        trace_oob++;
+                    }
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_OUTLIER)
+                    {
+                        trace_out++;
+                    }
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_SKIPPED)
+                    {
+                        trace_skip++;
+                    }
+                    if(ph->lastTraceStatus == ImmaturePointStatus::IPS_UNINITIALIZED)
+                    {
+                        trace_uninitialized++;
+                    }
+                    trace_total++;
+                }
+            }
+        }
+    }
+
+    void FullSystem::activatePointsMT()
+    {
+        // This will turn immature points into real points
+        /// TODO: Move the magic values into constant variables, i.e. to make it more readable
+
+        // Conditions where we have less nPoints in energyFunctional than the user setting "desiredPointDensity" contains
+        if (ef->nPoints < setting_desiredPointDensity * 0.66)
+        {
+            currentMinActDist -= 0.8;
+        }
+        if (ef->nPoints < setting_desiredPointDensity * 0.8)
+        {
+            currentMinActDist -= 0.5;
+        }
+        else if (ef->nPoints < setting_desiredPointDensity * 0.9)
+        {
+            currentMinActDist -= 0.2;
+        }
+        else if (ef->nPoints < setting_desiredPointDensity * 1.0)
+        {
+            currentMinActDist -= 0.1;
+        }
+
+        // Conditions where we have more nPoints in energyFunctional than the user setting "desiredPointDensity" contains
+        if (ef->nPoints > setting_desiredPointDensity * 1.5)
+        {
+            currentMinActDist += 0.8;
+        }
+        if (ef->nPoints > setting_desiredPointDensity * 1.3)
+        {
+            currentMinActDist += 0.5;
+        }
+        if (ef->nPoints > setting_desiredPointDensity * 1.15)
+        {
+            currentMinActDist += 0.2;
+        }
+        if (ef->nPoints > setting_desiredPointDensity * 1.0)
+        {
+            currentMinActDist += 0.1;
+        }
+
+        // Clamp the currentMinActDist value to be in range (0 .... 4)
+        if (currentMinActDist < 0)
+        {
+            currentMinActDist = 0;
+        }
+        if (currentMinActDist > 4)
+        {
+            currentMinActDist = 4;
+        }
+
+        auto newestFr = frames.back();
+        vector<shared_ptr<FrameHessian>> frameHessians;
+        for (auto fr : frames)
+        {
+            frameHessian.push_back(fr->frameHessian);
+        }
+
+        // make dist map
+        coarseDistanceMap->makeK(Hcalib->mpCH);
+        coarseDistanceMap->makeDistanceMap(frameHessians, newestFr->frameHessian);
+
+        vector<shared_ptr<ImmaturePoint>> toOptimize;
+        toOptimize.reserve(20000);
         
+        // go through all active frames
+        for (auto host : frameHessians)
+        {
+            if(host == newestFr->frameHessian)
+            {
+                continue;
+            }
 
+            SE3 fhToNew = newestFr->frameHessian->PRE_worldToCam * host->PRE_camToWorld;
+            Mat33f KRKi = (coarseDistanceMap->K[1] * fhToNew.rotationMatrix().cast<float>() * coarseDistanceMap->Ki[0]);
+            Vec3f Kt = (coarseDistanceMap->K[1] * fhToNew.translation().cast<float>());
 
+            for (size_t i = 0; i < host->frame->features.size(); i++)
+            {
+                /// TODO: Check if the re-definition in the if block is really necessary
+                shared_ptr<Feature> &feat = host->frame->features[i];
+                if (feat->status == Feature::FeatureStatus::IMMATURE && feat->ip)
+                {
+                    shared_ptr<Feature> &feat = host->frame->features[i];
+                    shared_ptr<ImmaturePoint> &ph = host->frame->features[i]->ip;
+                    ph->idxInImmaturePoints = i;
 
+                    // delete points that have never been traced successfully, or that are an outlier on the last trace.
+                    if(!std::isfinite(ph->idepth_max) || ph->lastTraceStatus == IPS_OUTLIER)
+                    {
+                        feat->status = Feature::FeatureStatus::OUTLIER;
+                        feat->ReleaseImmature();
+                        continue;
+                    }
+
+                    bool canActivate = (ph->lastTraceStatus == IPS_GOOD
+                                        || ph->lastTraceStatus == IPS_SKIPPED
+                                        || ph->lastTraceStatus == IPS_BADCONDITION
+                                        || ph->lastTraceStatus == IPS_OOB)
+                                        && ph->lastTracePixelInterval < 8
+                                        && ph->quality > setting_minTraceQuality
+                                        && (ph->idepth_max + ph->idepth_min) > 0;
+                    if(!canActivate)
+                    {
+                        // if point will be out afterwards, delete it instead.
+                        if(ph->feature->host.lock()->frameHessian->flaggedForMarginalization 
+                        || ph->lastTraceStatus == IPS_OOB)
+                        {
+                            feat->status = Feature::FeatureStatus::OUTLIER;
+                            feat->ReleaseImmature();
+                        }
+                        continue;
+                    }
+
+                    // see if we need to activate point due to distance map.
+                    Vec3f ptp = KRKi * Vec3f(feat->uv[0], feat->uv[1], 1) + Kt * (0.5f * (ph->idepth_max + ph->idepth_min));
+                    int u = ptp[0] / ptp[2] + 0.5f;
+                    int v = ptp[1] / ptp[2] + 0.5f;
+
+                    // Check if re-projected point (ptp) is inside of the image bounds (i.e. 0...w/h)
+                    if((u > 0 && v > 0 && u < wG[1] && v < hG[1]))
+                    {
+                        float dist = coarseDistanceMap->fwdWarpedIDDistFinal[u + wG[1] * v] + (ptp[0] - floorf((float) (ptp[0])));
+
+                        // NOTE: the not-so-nice "my_type" is used here
+                        if(dist >= currentMinActDist * ph->my_type)
+                        {
+                            coarseDistanceMap->addIntoDistFinal(u, v);
+                            toOptimize.push_back(ph);
+                        }
+                    } else
+                    {
+                        // drop it
+                        feat->status = Feature::FeatureStatus::OUTLIER;
+                        feat->ReleaseImmature();
+                    }
+                }
+            }
+        }
+
+        vector<shared_ptr<PointHessian>> optimized;
+        optimized.resize(toOptimize.size())
+
+        // this will actually turn immature points into point hessians
+        if(multiThreading)
+        {
+            threadReduce.reduce(bind(&FullSystem::activatePointsMT_Reductor, this, &optimized, &toOptimize, _1, _2, _3, _4), 0, toOptimize.size(), 50);
+        }
+        else
+        {
+            activatePointsMT_Reductor(&optimized, &toOptimize, 0, toOptimize.size(), 0, 0);
+        }
+
+        for (size_t k = 0; k < toOptimize.size(); k++)
+        {
+            shared_ptr<PointHessian> newpoint = optimized[k];
+            shared_ptr<ImmaturePoint> ph = toOptimize[k];
+
+            /// TODO: Is this condition (if true) really removing the immature point? Check later...
+            if (newpoint != nullptr)
+            {
+                // remove the immature point
+                ph->feature->status = Feature::FeatureStatus::VALID;
+
+                ph->feature->point->mpPH = newpoint;
+                ph->feature->ReleaseImmature();
+                newpoint->takeData();
+
+                for (auto r : newpoint->residuals)
+                {
+                    ef->insertResidual(r);
+                }
+            }
+            else if(newpoint == nullptr || ph->lastTraceStatus == IPS_OOB)
+            {
+                ph->feature-status = Feature::FeatureStatus::OUTLIER;
+                ph->feature-ReleaseImmature();
+            }
+        }
+    }
+
+    void FullSystem::activatePointsMT_Reductor(std::vector<shared_ptr<PointHessian>> *optimized, std::vector<shared_ptr<ImmaturePoint>> *toOptimize, int min, int max, Vec10 *stats, int tid)
+    {
+        vector<shared_ptr<ImmaturePointTemporaryResidual>> tr(frames.size(), nullptr);
+
+        for (auto &t : tr)
+        {
+            // create residual
+            t = shared_ptr<ImmaturePointTemporaryResidual>(new ImmaturePointTemporaryResidual());
+        }
+
+        for (int k = min; k < max; k++)
+        {
+            (*optimized)[k] = optimizeImmaturePoint((*toOptimize)[k], 1, tr);
+        }
+    }
+
+    void FullSystem::flagPointsForRemoval()
+    {
+        assert(EFIndicesValid);
+
+        std::vector<shared_ptr<FrameHessian>> fhsToMargPoints;
+
+        // Fill and initialize the values of fhsToMargPoints
+        for (int i = 0; i < (int) frames.size(); i++)
+        {
+            if(frames[i]->frameHessian->flaggedForMarginalization)
+            {
+                fhsToMargPoints.push_back(frames[i]->frameHessian);
+            }
+        }
+
+        int flag_oob = 0, flag_in = 0, flag_inin = 0, flag_nores = 0;
+
+        // go through all active frames
+        for (auto &fr : frames)
+        {
+            shared_ptr<FrameHessian> host = fr->frameHessian;
+            for (auto &feat : fr->features)
+            {
+                if(feat->status == Feature::FeatureStatus::VALID &&
+                    feat->point->status == Point::PointStatus::ACTIVE)
+                {
+                    shared_ptr<PointHessian> ph = feat->point->mpPH;
+
+                    if(ph->idepth_scaled < 0 || ph->residuals.size() == 0)
+                    {
+                        // idepth invalid or no residuals
+                        ph->point->status = Point::PointStatus::OUTLIER;
+                        feat->status = Feature::FeatureStatus::OUTLIER;
+                        flag_nores++;
+                    }
+                    else if(ph->isOOB(fhsToMargPoints) || host->flaggedForMarginalization)
+                    {
+                        // the point goes out of the boundary, or the host frame is marged
+                        flag_oob++;
+                        if(ph->isInlierNew())
+                        {
+                            flag_in++;
+                            int ngoodRes = 0;
+                            for (auto r : ph->residuals)
+                            {
+                                r->resetOOB();
+                                r->linearize(this->Hcalib->mpCH);
+                                r->isLinearized = false;
+                                r->applyRes(true);
+                                if(r->isActive())
+                                {
+                                    r->fixLinearizationF(this->ef);
+                                    ngoodRes++;
+                                }
+                            }
+
+                            if(ph->idepth_hessian > setting_minIdepthH_marg)
+                            {
+                                // idepth is good, margin it.
+                                flag_inin++;
+                                ph->point->status = Point::PointStatus::MARGINALIZED;
+                            }
+                            else
+                            {
+                                // idepth not good, drop it.
+                                ph->point->status = Point::PointStatus::OUT;
+                            }
+                        }
+                        else
+                        {
+                            // not active, drop it.
+                            ph->point->status = Point::PointStatus::OUT;
+                        }
+                    }
+                }
+            }
+        }
+
+        LOG(INFO) << "Flag: nores: " << flag_nores << ", oob: " << flag_oob << ", marged: " << flag_inin << endl;
+    }
+
+    void FullSystem::makeNewTraces(shared_ptr<FrameHessian> newFrame, float *gtDepth)
+    {
+        if(setting_pointSelection == 1)
+        {
+            LOG(INFO) << "using LDSO point selection strategy" << endl;
+            newFrame->frame->features.reserve(setting_desiredImmatureDensity);
+            detector.DetectCorners(setting_desiredImmatureDensity, newFrame->frame);
+            for (auto &feat : newFrame->frame->features)
+            {
+                // create a immature point
+                feat->ip = shared_ptr<ImmaturePoint>(new ImmaturePoint(newFrame->frame, feat, 1, Hcalib->mpCH));
+            }
+            LOG(INFO) << "new features created: " << newFrame->frame->features.size() << endl;
+        }
+        else if(setting_pointSelection == 0)
+        {
+            LOG(INFO) << "using original DSO point selection strategy" << endl;
+            pixelSelector->allowFast = true;
+            int numPointsTotal = pixelSelector->makeMaps(newFrame, selectionMap, setting_desiredImmatureDensity);
+            newFrame->frame->features.reserve(numPointsTotal);
+
+            for (int y = patternPadding + 1; y < hG[0] - patternPadding - 2; y++)
+            {
+                for (int x = patternPadding + 1; x < wG[0] - patternPadding - 2; x++)
+                {
+                    int i = x + y * wG[0];
+                    if(selectionMap[i] == 0)
+                    {
+                        continue;
+                    }
+
+                    shared_ptr<Feature> feat(new Feature(x, y, newFrame->frame));
+                    feat->ip = shared_ptr<ImmaturePoint>(new ImmaturePoint(newFrame->frame, feat, selectionMap[i], Hcalib->mpCH));
+
+                    if(!std::isfinite(feat->ip->energyTH))
+                    {
+                        feat->ReleaseAll();
+                        continue;
+                    }
+                    else
+                    {
+                        newFrame->frame->features.push_back(feat);
+                    }
+                }
+            }
+            LOG(INFO) << "new features created: " << newFrame->frame->features.size() << endl;
+        }
+        else if(setting_pointSelection == 2)
+        {
+            LOG(INFO) << "using random point selection strategy" << endl;
+            cv::RNG rng;
+            newFrame->frame->features.reserve(setting_desiredImmatureDensity);
+            for (int i = 0; i < setting_desiredImmatureDensity; i++)
+            {
+                int x = rng.uniform(20, wG[0] - 20);
+                int y = rng.uniform(20, hG[0] - 20);
+
+                shared_ptr<Feature> feat(new Feature(x, y, newFrame-frame));
+                feat->ip = shared_ptr<ImmaturePoint>(new ImmaturePoint(newFrame->frame, feat, 1, Hcalib->mpCH));
+                if(!std::isfinite(feat->ip->energyTH))
+                {
+                    feat->ReleaseAll();
+                    continue;
+                }
+                else
+                {
+                    newFrame->frame->features.push_back(feat);
+                }
+            }
+            LOG(INFO) << "new features created: " << newFrame->frame->features.size() << endl;
+        }
+    }
+
+    void FullSystem::initializeFromInitializer(shared_ptr<FrameHessian> newFrame)
+    {
+        unique_lock<mutex> lock(mapMutex);
+
+        shared_ptr<FrameHessian> firstFrame = coarseInitializer->firstFrame;
+        shared_ptr<Frame> fr = firstFrame->frame;
+        firstFrame->idx = frames.size();
+
+        frames.push_back(fr);
+        firstFrame->frameID = globalMap->NumFrames();
+        ef->insertFrame(firstFrame, Hcalib->mpCH);
+        setPrecalcValues();
+
+        fr->features.reserve(wG[0] * hG[0] * 0.2f); // 20% of image width * height
+
+        float sumID = 1e-5, numID = 1e-5;
+        for (int i = 0; i < coarseInitializer->numPoints[0]; i++)
+        {
+            sumID += coarseInitializer->points[0][i].iR;
+            numID++;
+        }
+        float rescaleFactor = 1 / (sumID / numID);
+
+        // randomly sub-select the points I need.
+        float keepPercentage = setting_desiredPointDensity / coarseInitializer->numPoints[0];
+
+        LOG(INFO) << "Initialization: keep " << 100 * keepPercentage << " (need " << setting_desiredPointDensity << ", have " << coarseInitializer->numPoints[0] << ")!" << endl;
+
+        // Create features in the first frame.
+        for (size_t i = 0; i < size_t(coarseInitializer->numPoints[0]); i++)
+        {
+            if(rand() / (float) RAND_MAX > keepPercentage)
+            {
+                continue;
+            }
+            Pnt *point = coarseInitializer->points[0] + i;
+
+            shared_ptr<Feature> feat(new Feature(point->u + 0.5f, point->v + 0.5f, firstFrame->frame));
+            feat->ip = shared_ptr<ImmaturePoint>(new ImmaturePoint(firstFrame->frame, feat, point->my_type, Hcalib->mpCH));
+
+            if(!std::isfinite(feat->ip->energyTH))
+            {
+                feat->ReleaseImmature();
+                continue;
+            }
+
+            feat->CreateFromImmature();
+            shared_ptr<PointHessian> ph = feat->point->mpPH;
+            if(!std::isfinite(ph->energyTH))
+            {
+                feat->ReleaseMapPoint();
+                continue;
+            }
+            feat->ReleaseImmature(); // No longer needs the immature part
+            fr->features.push_back(feat);
+
+            ph->setIdepthScaled(point->iR * rescaleFactor);
+            ph->setIdepthZero(ph->idepth);
+            ph->hasDepthPrior = true;
+            ph->point->status = Point::PointStatus::ACTIVE;
+            ph->takeData(); // set the idepth into optimization
+        }
         
+        SE3 firstToNew = coarseInitializer->thisToNext;
+        firstToNew.translation() /= rescaleFactor;
 
+        // really no mutex lock required, as we are initializing.
+        {
+            unique_lock<mutex> crlock(shellPoseMutex);
+            firstFrame->setEvalPT_scaled(fr->getPose(), firstFrame->frame->aff_g2l);
+            newFrame->frame->setPose(firstToNew);
+            newFrame->setEvalPT_scaled(newFrame->frame->getPose(), newFrame->frame->aff_g2l);
+        }
 
+        initialized = true;
+        globalMap->AddKeyFrame(fr);
+        LOG(INFO) << "Initialized from initializer, points: " << firstFrame->frame->features.size() << endl;
+    }
+
+    void FullSystem::removeOutliers()
+    {
+        int numPointsDropped = 0;
+        for (auto &fr : frames)
+        {
+            for (auto &feat : fr->features)
+            {
+                if(feat->status == Feature::FeatureStatus::VALID && feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                {
+                    shared_ptr<PointHessian> ph = feat->point->mpPH;
+                    if(ph->residuals.empty())
+                    {
+                        ph->point-status = Point::PointStatus::OUTLIER;
+                        feat->status = Feature::FeatureStatus::OUTLIER;
+                        numPointsDropped++;
+                    }
+                }
+            }
+        }
+
+        LOG(INFO) << "remove outliers done, outliers: " << numPointsDropped << endl;
+        ef->dropPointsF();
+    }
+
+    void FullSystem::setPrecalcValues()
+    {
+        for (auto &fr : frames)
+        {
+            fr->frameHessian->targetPrecalc.resize(frames.size());
+            for (size_t i = 0; i < frames.size(); i++)
+            {
+                fr->frameHessian->targetPrecalc[i].Set(fr->frameHessian, frames[i]->frameHessian, Hcalib->mpCH);
+            }
+        }
+
+        ef->setDeltaF(Hcalib->mpCH);
+    }
+
+    void FullSystem::solveSystem(int iteration, double lambda)
+    {
+        ef->lastNullspaces_forLogging = getNullspaces(
+            ef->lastNullspaces_pose,
+            ef->lastNullspaces_scale,
+            ef->lastNullspaces_affA,
+            ef->lastNullspaces_affB,
+        );
+        ef->solveSystemF(iteration, lambda, Hcalib->mpCH);
+    }
+
+    Vec3 FullSystem::linearizeAll(bool fixLinearization)
+    {
+        double lastEnergyP = 0;
+        double lastEnergyR = 0;
+        double num = 0;
+
+        std::vector<shared_ptr<PointFrameResidual>> toRemove[NUM_THREADS];
+        for (int i = 0; i < NUM_THREADS; i++)
+        {
+            toRemove[i].clear();
+        }
+
+        if(multiThreading)
+        {
+            threadReduce.reduce(bind(&FullSystem::linearizeAll_Reductor, this, fixLinearization, toRemove, _1, _2, _3, _4), 0, activeResiduals.size(), 0);
+            lastEnergyP = threadReduce.stats[0];
+        }
+        else
+        {
+            Vec10 stats;
+            linearizeAll_Reductor(fixLinearization, toRemove, 0, activeResiduals.size(), &stats, 0);
+            lastEnergyP = stats[0];
+        }
+
+        setNewFrameEnergyTH();
+
+        if(fixLinearization)
+        {
+            for (auto r : activeResiduals)
+            {
+                shared_ptr<PointHessian> ph = r->point.lock();
+                if(ph->lastResiduals[0].first == r)
+                {
+                    ph->lastResiduals[0].second = r->state_state;
+                }
+                else if(ph->lastResiduals[1].first == r)
+                {
+                    ph->lastResidual[1].second = r->state_state;
+                }
+            }
+            int nResRemoved = 0;
+            for (int i = 0; i < NUM_THREADS; i++)
+            {
+                for (auto r : toRemove[i])
+                {
+                    shared_ptr<PointHessian> ph = r->point.lock();
+                    if(ph->lastResiduals[0].first == r)
+                    {
+                        ph->lastResiduals[0].first = 0;
+                    }
+                    else if(ph->lastResiduals[1].first == r)
+                    {
+                        ph->lastResidual[1].first = 0;
+                    }
+
+                    ef->dropResidual(r); // this will actually remove the residual
+                    nResRemoved++;
+                }
+            }
+        }
+        return Vec3(lastEnergyP, lastEnergyR, num);
+    }
+
+    void FullSystem::linearizeAll_Reductor(bool fixLinearization, std::vector<shared_ptr<PointFrameResidual>> *toRemove, int min, int max, Vec10 *stats, int tid)
+    {
+        for (int k = min; k < max; k++)
+        {
+            shared_ptr<PointFrameResidual> r = activeResiduals[k];
+            (*stats)[0] += r->linearize(Hcalib->mpCH);
+
+            if(fixLinearization)
+            {
+                r->applyRes(true);
+
+                if(r->isActive())
+                {
+                    if(r->isNew)
+                    {
+                        shared_ptr<PointHessian> p = r->point.lock();
+                        shared_ptr<FrameHessian> host = r->host.lock();
+                        shared_ptr<FrameHessian> target = r->target.lock();
+                        Vec3f ptp_inf = host->targetPrecalc[target->idx].PRE_KRKiTll * Vec3f(p->u, p->v, 1); // projected point assuming infinite depth.
+                        Vec3f ptp = ptp_inf + host->targetPrecalc[target->idx].PRE_KtTll * p->idepth_scaled; // projected point with real depth.
+                        float relBS = 0.01 * ((ptp_inf.head<2>() / ptp_inf[2]) - (ptp.head<2>() / ptp[2])).norm(); // 0.01 = one pixel.
+                        if(relBS > p->maxRelBaseline)
+                        {
+                            p->maxRelBaseline = relBS;
+                        }
+                        p->numGoodResiduals++;
+                    }
+                }
+                else
+                {
+                    toRemove[tid].push_back(activeResiduals[k]);
+                }
+            }
+        }
+    }
+
+    // applies step to linearization point.
+    bool FullSystem::doStepFromBackup(float stepfacC, float stepfacT, float stepfacR, float stepfacA, float stepfacD)
+    {
+        Vec10 pstepfac;
+        pstepfac.segment<3>(0).setConstant(stepfacT);
+        pstepfac.segment<3>(3).setConstant(stepfacR);
+        pstepfac.segment<4>(6).setConstant(stepfacA);
+
+        float sumA = 0, sumB = 0, sumT = 0, sumR = 0, sumID = 0, numID = 0;
+
+        float sumNID = 0;
+
+        if(setting_solverMode & SOLVER_MOMENTUM)
+        {
+            Hcalib->mpCH->setValue(Hcalib->mpCH->value_backup + Hcalib->mpCH->step);
+            for (auto &fr : frames)
+            {
+                auto fh = fr->frameHessian;
+                Vec10 step = fh->step;
+                step.head<6>() += 0.5f * (fh->step_backup.head<6>());
+
+                fh->setState(fh->state_backup + step);
+                sumA += step[6] * step[6];
+                sumB += step[7] * step[7];
+                sumT += step.segment<3>(0).squaredNorm();
+                sumR += step.segment<3>(3).squaredNorm();
+
+                /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+                for (auto feat : fr->features)
+                {
+                    if(feat->status == Feature::FeatureStatus::VALID
+                    && feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                    {
+                        auto ph = feat->point->mpPH;
+                        float step = ph->step + 0.5f * (ph->step_backup);
+                        ph->setIdepth(ph->idepth_backup + step);
+                        sumID += step * step;
+                        sumNID += fabsf(ph->idepth_backup);
+                        numID++;
+                        ph->setIdepthZero(ph->idepth_backup + step); 
+                    }
+                }
+            }
+            
+        }
+        else
+        {
+            Hcalib->mpCH->setValue(Hcalib->mpCH->value_backup + stepfacC * Hcalib->mpCH->step);
+            for (auto &fr : frames)
+            {
+                auto fh = fr->frameHessian;
+                fh->setState(fh->state_backup + pstepfac.cwiseProduct(fh->step));
+                sumA += fh->step[6] * fh->step[6];
+                sumB += fh->step[7] * fh->step[7];
+                sumT += fh->step.segment<3>(0).squaredNorm();
+                sumR += fh->step.segment<3>(3).squaredNorm();
+
+                /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+                for (auto feat : fr->features)
+                {
+                    if(feat->status == Feature::FeatureStatus::VALID
+                    && feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                    {
+                        auto ph = feat->point->mpPH;
+                        ph->setIdepth(ph->idepth_backup + stepfacD * ph->step);
+                        sumID += ph->step * ph->step;
+                        sumNID += fabsf(ph->idepth_backup);
+                        numID++;
+                        ph->setIdepthZero(ph->idepth_backup + stepfacD * ph->step); 
+                    }
+                }
+            }
+        }
+
+        sumA /= frames.size();
+        sumB /= frames.size();
+        sumR /= frames.size();
+        sumT /= frames.size();
+        sumID /= numID;
+        sumNID /= numID;
+
+        EFDeltaValid = false;
+        setPrecalcValues();
+
+        return sqrtf(sumA) < 0.0005 * setting_thOptIterations &&
+        sqrtf(sumB) < 0.00005 * setting_thOptIterations &&
+        sqrtf(sumR) < 0.00005 * setting_thOptIterations &&
+        sqrtf(sumT) * sumNID < 0.00005 * setting_thOptIterations;
+    }
+
+    void FullSystem::backupState(bool backupLastStep)
+    {
+        if(setting_solverMode & SOLVER_MOMENTUM)
+        {
+            if(backupLastStep)
+            {
+                Hcalib->mpCH->step_backup = Hcalib->mpCH->step;
+                Hcalib->mpCH->value_backup = Hcalib->mpCH->value;
+                for (auto &fr : frames)
+                {
+                    auto fh = fr->frameHessian;
+                    fh->step_backup = fh->step;
+                    fh->state_backup = fh->get_state();
+                    /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+                    for (auto feat : fr->features)
+                    {
+                        if(feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                        {
+                            auto ph = feat->point->mpPH;
+                            ph->idepth_backup = ph->idepth;
+                            ph->step_backup = ph->step;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Hcalib->mpCH->step_backup.setZero();
+                Hcalib->mpCH->value_backup = Hcalib->mpCH->value;
+                for (auto &fr : frames)
+                {
+                    auto fh = fr->frameHessian;
+                    fh->step_backup.setZero();
+                    fh->state_backup = fh->get_state();
+                    /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+                    for (auto feat : fr->features)
+                    {
+                        if(feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                        {
+                            auto ph = feat->point->mpPH;
+                            ph->idepth_backup = ph->idepth;
+                            ph->step_backup = 0;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            Hcalib->mpCH->value_backup = Hcalib->mpCH->value;
+            for (auto &fr : frames)
+            {
+                auto fh = fr->frameHessian;
+                fh->state_backup = fh->get_state();
+                /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+                for (auto feat : fr->features)
+                {
+                    if(feat-status == Feature::FeatureStatus::VALID &&
+                    feat->point->status == Point::PointStatus::ACTIVE)
+                    {
+                        auto ph = feat->point->mpPH;
+                        ph->idepth_backup = ph->idepth;
+                    }
+                }
+            }
+        }
+    }
+
+    /// TODO: Maybe typo: "loadStateBackup()"?
+    void FullSystem::loadSateBackup()
+    {
+        Hcalib->mpCH->setValue(Hcalib->mpCH->value_backup);
+        /// TODO: fr should be &fr I believe... (because it is used as a reference below)
+        for (auto fr : frames)
+        {
+            auto fh = fr->frameHessian;
+            fh->setState(fh->state_backup);
+            /// TODO: feat should be &feat I believe... (because it is used as a reference below)
+            for (auto feat : fr->features)
+            {
+                if(feat->point && feat->point->status == Point::PointStatus::ACTIVE)
+                {
+                    auto ph = feat->point->mpPH;
+                    ph->setIdepth(ph->idepth_backup);
+                    ph->setIdepthZero(ph->idepth_backup);
+                }
+            }
+        }
+
+        EFDeltaValid = false;
+        setPrecalcValues();
+    }
+
+    double FullSystem::calcLEnergy()
+    {
+        if(setting_forceAceptStep)
+        {
+            return 0;
+        }
+        return ef->calcLEnergyF_MT();
+    }
+
+    double FullSystem::calcMEnergy()
+    {
+        if(setting_forceAceptStep)
+        {
+            return 0;
+        }
+        return ef->calcMEnergyF();
+    }
+
+    void FullSystem::applyRes_Reductor(bool copyJacobians, int min, int max, Vec10 *stats, int tid)
+    {
+        for (int k = min; k < max; k++)
+        {
+            activeResiduals[k]->applyRes(true);
+        }
+    }
+
+    std::vector<VecX> FullSystem::getNullspaces(std::vector<VecX> &nullspaces_pose,
+    std::vector<VecX> &nullspaces_scale,
+    std::vector<VecX> &nullspaces_affA,
+    std::vector<VecX> &nullspaces_affB,)
+    {
+        nullspaces_pose.clear();
+        nullspaces_scale.clear();
+        nullspaces_affA.clear();
+        nullspaces_affB.clear();
+
+        int n = CPARS + frames.size() * 8;
+        std::vector<VecX> nullspaces_x0_pre;
+        // Nullspaces for Pose (Translation and Rotation):
+        for (int i = 0; i < 6; i++)
+        {
+            VecX nullspace_x0(n);
+            nullspace_x0.setZero();
+            /// TODO: fr should be &fr I believe... (because it is used as a reference below)
+            for (auto fr : frames)
+            {
+                auto fh = fr->frameHessian;
+                nullspace_x0.segment<6>(CPARS + fh->idx * 8) = fh->nullspaces_pose.col(i);
+                nullspace_x0.segment<3>(CPARS + fh->idx * 8) *= SCALE_XI_TRANS_INVERSE;
+                nullspace_x0.segment<3>(CPARS + fh->idx * 8 + 3) *= SCALE_XI_ROT_INVERSE;
+            }
+            nullspaces_x0_pre.push_back(nullspace_x0);
+            nullspaces_pose.push_back(nullspace_x0);
+        }
+        // Nullspaces for Affine Light parameters:
+        for (int i = 0; i < 2; i++)
+        {
+            VecX nullspace_x0(n);
+            nullspace_x0.setZero();
+            /// TODO: fr should be &fr I believe... (because it is used as a reference below)
+            for (auto fr : frames)
+            {
+                auto fh = fr->frameHessian;
+                nullspace_x0.segment<2>(CPARS + fh->idx * 8 + 6) = fh->nullspaces_affine.col(i).head<2>();
+                nullspace_x0[CPARS + fh->idx * 8 + 6] *= SCALE_A_INVERSE;
+                nullspace_x0[CPARS + fh->idx * 8 + 7] *= SCALE_B_INVERSE;
+            }
+            nullspaces_x0_pre.push_back(nullspace_x0);
+            if(i == 0)
+            {
+                nullspaces_affA.push_back(nullspace_x0);
+            }
+            if(i == 1)
+            {
+                nullspaces_affB.push_back(nullspace_x0);
+            }
+        }
+        // Nullspaces for Scale:
+        VecX nullspace_x0(n);
+        nullspace_x0.setZero();
+        /// TODO: fr should be &fr I believe... (because it is used as a reference below)
+        for (auto fr : frames)
+        {
+            auto fh = fr->frameHessian;
+            nullspace_x0.segment<6>(CPARS + fh->idx * 8) = fh->nullspaces_scale;
+            nullspace_x0.segment<3>(CPARS + fh->idx * 8) *= SCALE_XI_TRANS_INVERSE;
+            nullspace_x0.segment<3>(CPARS + fh->idx * 8 + 3) *= SCALE_XI_ROT_INVERSE;
+        }
+        nullspaces_x0_pre.push_back(nullspace_x0);
+        nullspaces_scale.push_back(nullspace_x0);
+
+        return nullspaces_x0_pre;
+    }
+
+    void FullSystem::setNewFrameEnergyTH()
+    {
+        // collect all residuals and make decision on TH
+        allResVec.clear();
+        allResVec.reserve(activeResiduals.size() * 2);
+        auto fr = frames.back();
+        auto newFrame = fr->frameHessian;
+
+        for (auto &r : activeResiduals)
+        {
+            if(r->state_NewEnergyWithOutlier >= 0 && r->target.lock() == newFrame)
+            {
+                allResVec.push_back(r->state_NewEnergyWithOutlier);
+            }
+        }
+
+        if(allResVec.size() == 0)
+        {
+            newFrame->frameEnergyTH = 12 * 12 * patternNum;
+            return; // should never happen, but lets make sure.
+        }
+
+        int nthIdx = setting_frameEnergyTHN * allResVec.size();
+
+        assert(nthIdx < (int) allResVec.size());
+        assert(setting_frameEnergyTHN < 1);
+
+        std::nth_element(allResVec.begin(), allResVec.begin() + nthIdx, allResVec.end());
+        float nthElement = sqrtf(allResVec[nthIdx]);
+
+        newFrame->frameEnergyTH = nthElement * setting_frameEnergyTHFacMedian;
+        newFrame->frameEnergyTH = 26.0f * setting_frameEnergyTHConstWeight + newFrame->frameEnergyTH * (1 - setting_frameEnergyTHConstWeight);
+        newFrame->frameEnergyTH = newFrame->frameEnergyTH * newFrame->frameEnergyTH;
+        newFrame->frameEnergyTH *= setting_overallEnergyTHWeight * setting_overallEnergyTHWeight;
+    }
+
+    void FullSystem::printOptRes(const Vec3 &res, double resL, double resM, double resPrior, double LExact, float a, float b)
+    {
+        char buff[256] = {};
+        sprintf(buff, "A(%f)=(AV %.3f). Num: A(%'d) + M(%'d); ab %f %f!\n",
+        res[0],
+        sqrtf((float) (res[0] / (patternNum * ef->resInA))),
+        ef->resInA,
+        ef->resInM,
+        a,
+        b
+        );
+        LOG(INFO) << string(buff);
+    }
+
+    void FullSystem::mappingLoop()
+    {
+        unique_lock<mutex> lock(trackMapSyncMutex);
+
+        while (runMapping)
+        {
+            // wait for an unmapped frame
+            while (unmappedTrackedFrames.size() == 0)
+            {
+                trackedFrameSignal.wait(lock);
+                if(!runMapping)
+                {
+                    break;
+                }
+            }
+            if(!runMapping)
+            {
+                break;
+            }
+
+            // get an unmapped frame, tackle it.
+            shared_ptr<Frame> fr = unmappedTrackedFrames.front();
+            auto fh = fr->frameHessian;
+            unmappedTrackedFrames.pop_front()
+
+            // guaranteed to make a KF for the very first two tracked frames.
+            if(globalMap->NumFrames() <= 2)
+            {
+                lock.unlock();
+                makeKeyFrame(fh);
+                lock.lock();
+                mappedFrameSignal.notify_all();
+                continue;
+            }
+
+            if(unmappedTrackedFrames.size() > 3)
+            {
+                needToKetchupMapping = true;
+            }
+
+            if(unmappedTrackedFrames.size() > 0)
+            {
+                // if there are other frames to track, do that first
+                lock.unlock();
+                makeNonKeyFrame(fh);
+                lock.lock();
+
+                if (needToKetchupMapping && unmappedTrackedFrames.size() > 0)
+                {
+                    auto fr = unmappedTrackedFrames.front();
+                    shared_ptr<FrameHessian> fh = fr->frameHessian;
+                    unmappedTrackedFrames.pop_front();
+                    {
+                        unique_lock<mutex> crlock(shellPoseMutex);
+                        fh->setEvalPT_scaled(fr->getPose(), fh->frame->aff_g2l);
+                    }
+                }
+            }
+            else
+            {
+                if(setting_realTimeMaxKF || needNewKFAfter >= int(frames.back()->id))
+                {
+                    lock.unlock();
+                    makeKeyFrame(fh);
+                    needToKetchupMapping = false;
+                    lock.lock();
+                }
+                else
+                {
+                    lock.unlock();
+                    makeNonKeyFrame(fh);
+                    lock.lock();
+                }
+            }
+
+            mappedFrameSignal.notify_all();
+        }
+        LOG(INFO) << "MAPPING FINISHED!" << endl;
+    }
+
+    bool FullSystem::saveAll(const string &filename)
+    {
+        ofstream fout(filename, ios::out | ios::binary);
+        if(!fout)
+        {
+            return false;
+        }
+        int nKF = globalMap->NumFrames();
+        fout.write((char *) &nKF, sizeof(int));
+        auto allKFs = globalMap->GetAllKFs();
+        for (auto &frame : allKFs)
+        {
+            frame->save(fout);
+        }
+        fout.close();
+        LOG(INFO) << "Writing " << nKF << " keyframes to file " << filename << ".... ...DONE!" << endl;
+        return true;
+    }
+
+    bool FullSystem::loadAll(const string &filename)
+    {
+        ifstream fin(filename);
+        if(!fin)
+        {
+            return false;
+        }
+        int numKF = 0;
+
+        fin.read((char *) &numKF, sizeof(numKF));
+
+        vector<shared_ptr<Frame>> allKFs;
+        allKFs.resize(numKF, nullptr);
+        for (auto &kf : allKFs)
+        {
+            kf = shared_ptr<Frame>(new Frame());
+        }
+
+        int i = 0;
+        while (!fin.eof() && i < int(allKFs.size()))
+        {
+            shared_ptr<Frame> &newFrame = allKFs[i];
+            newFrame->load(fin, newFrame, allKFs);
+            i++;
+        }
         
+        fin.close();
+
+        if(viewer)
+        {
+            viewer->publishKeyframes(allKFs, false, Hcalib->mpCH);
+        }
+
+        frames = allKFs;
+        for(auto &kf : allKFs)
+        {
+            globalMap->AddKeyFrame(kf);
+        }
+
+        LOG(INFO) << "Loaded total " << frames.size() << " keyframes from file " << filename << ".... ...DONE!" << endl;
+        return true;
+    }
+
+    void FullSystem::printResult(const string &filename, bool printOptimized)
+    {
+        unique_lock<mutex> lock(trackMutex);
+        unique_lock<mutex> crlock(shellPoseMutex);
+
+        std::ofstream myfile(filename);
+        myfile << std::setprecision(15);
+
+        auto allKFs = globalMap->GetAllKFs();
+        LOG(INFO) << "Total keyframes: " << allKFs.size() << endl;
+
+        for (auto &fr : allKFs)
+        {
+            SE3 Twc;
+            Sim3 Swc;
+            if(printOptimized)
+            {
+                Swc = fr->getPoseOpti().inverse();
+                Twc = SE3(Swc.rotationMatrix(), Swc.translation());
+            }
+            else
+            {
+                Twc = fr->getPose().inverse();
+            }
+            myfile << fr->timestamp <<
+            " " << Twc.translation().transpose() <<
+            " " << Twc.so3().unit_quaternion().x() <<
+            " " << Twc.so3().unit_quaternion().y() <<
+            " " << Twc.so3().unit_quaternion().z() <<
+            " " << Twc.so3().unit_quaternion().w() << "\n";
+        }
+        myfile.close();
+    }
+
+    void FullSystem::printResultKitti(const string &filename, bool printOptimized)
+    {
+        LOG(INFO) << "saving kitti trajectory..." << endl;
+
+        unique_lock<mutex> lock(trackMutex);
+        unique_lock<mutex> crlock(shellPoseMutex);
+        std::ofstream f(filename);
+
+        f << std::setprecision(9);
+
+        auto allKFs = globalMap->GetAllKFs();
+        for (auto &fr : allKFs)
+        {
+            SE3 Twc; // Transformation matrix
+            Vec3 twc; // translation vector
+            Mat33 Rwc; // Rotation matrix
+            Sim3 Swc; // Similarity Transformation matrix
+            if(printOptimized)
+            {
+                Swc = fr->getPoseOpti().inverse();
+                Rwc = Swc.rotationMatrix();
+                twc = Swc.translation();
+            }
+            else
+            {
+                Twc = fr->getPose().inverse();
+                Rwc = Twc.rotationMatrix();
+                twc = Twc.translation();
+            }
+            f << fr->id << " " <<
+            Rwc(0, 0) << " " << Rwc(0, 1) << " " << Rwc(0, 2) << " " << twc(0) << " " <<
+            Rwc(1, 0) << " " << Rwc(1, 1) << " " << Rwc(1, 2) << " " << twc(1) << " " <<
+            Rwc(2, 0) << " " << Rwc(2, 1) << " " << Rwc(2, 2) << " " << twc(2) << endl;
+        }
+        f.close();
+
+        LOG(INFO) << "done." << endl;
     }
 
 }
