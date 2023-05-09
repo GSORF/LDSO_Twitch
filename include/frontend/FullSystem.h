@@ -9,15 +9,11 @@
 #include <thread>
 
 // Our own data structures
-
-/* /// TODO: 
 #include "Frame.h"
 #include "Point.h"
 #include "Feature.h"
 #include "Camera.h"
-*/
 #include "ImageAndExposure.h"
-/* /// TODO: 
 #include "DSOViewer.h"
 #include "Map.h"
 #include "FeatureDetector.h"
@@ -26,7 +22,6 @@
 
 #include "internal/IndexThreadReduce.h"
 #include "LoopClosing.h"
-*/
 
 // Namespace used:
 using namespace std;
@@ -174,7 +169,7 @@ namespace ldso {
     reductor for activating points
     will call optimizeImmaturePoint in a multi-thread way
     */
-    void activatePointsMT_Reductor(std::vector<shared_ptr<PointHessian>> *optimized
+    void activatePointsMT_Reductor(std::vector<shared_ptr<PointHessian>> *optimized,
                                     std::vector<shared_ptr<ImmaturePoint>> *toOptimize,
                                     int min, int max, Vec10 *stats, int tid);
 
@@ -271,7 +266,7 @@ namespace ldso {
         std::vector<VecX> &nullspaces_pose,
         std::vector<VecX> &nullspaces_scale,
         std::vector<VecX> &nullspaces_affA,
-        std::vector<VecX> &nullspaces_affB,
+        std::vector<VecX> &nullspaces_affB
     );
 
     void setNewFrameEnergyTH();

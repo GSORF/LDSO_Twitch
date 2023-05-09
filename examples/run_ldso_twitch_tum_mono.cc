@@ -11,11 +11,11 @@
 
 #include <glog/logging.h>
 
-// TODO: add includes ("Fullsystem")
-// #include "frontend/FullSystem.h"
+// add includes ("Fullsystem")
+#include "frontend/FullSystem.h"
 #include "DatasetReader.h"
 
-// TODO: create global variables
+// create global variables
 using namespace std;
 using namespace ldso;
 
@@ -390,18 +390,12 @@ int main(int argc, char **argv)
     }
 
 
-    /* TODO:
-    */
-    
     // Initialize the "FullSystem" which is the core of our VSLAM (Visual Simultaneous Localization And Mapping):
-    /* TODO:
     shared_ptr<FullSystem> fullSystem(new FullSystem(voc));
     fullSystem->setGammaFunction(reader->getPhotometricGamma());
     fullSystem->linearizeOperation = (playbackSpeed == 0);
-    */
-
+    
     // Initialize the Graphical User Interface (GUI) using the Pangolin library:
-    /* TODO:
     shared_ptr<PangolinDSOViewer> viewer = nullptr;
     if(!disableAllDisplay)
     {
@@ -412,8 +406,7 @@ int main(int argc, char **argv)
     {
         LOG(INFO) << "visualization is disabled!" << endl;
     }
-    */
-
+    
     // This is the main loop which runs on a separate thread:
     std::thread runthread([&]() {
         std::vector<int> idsToPlay;
@@ -464,15 +457,13 @@ int main(int argc, char **argv)
             }
             
 
-            /* TODO: 
             if(!fullSystem->initialized)
             {
                 gettimeofday(&tv_start, NULL);
                 started = clock();
                 sInitializerOffset = timesToPlayAt[ii];
             }
-            */
-
+            
             int i = idsToPlay[ii];
 
             ImageAndExposure *img; // The main datatype for an image
@@ -507,12 +498,11 @@ int main(int argc, char **argv)
             if(!skipFrame)
             {
                 // Here the "real nice magic" is happening! 
-                /// TODO: fullSystem->addActiveFrame(img, i);
+                fullSystem->addActiveFrame(img, i);
             }
             delete img;
 
             // Cleaning up
-            /* TODO: 
             if(fullSystem->initFailed || setting_fullResetRequested)
             {
                 if(ii < 250 || setting_fullResetRequested)
@@ -527,22 +517,19 @@ int main(int argc, char **argv)
                         sleep(1);
                         fullSystem->setViewer(viewer);
                     }
-                    setting_fullResetRequired = false;
+                    setting_fullResetRequested = false;
                 }
             }
-            */
-
-            /* TODO
+            
             if(fullSystem->isLost)
             {
                 LOG(INFO) << "Lost!";
                 break;
             }
-            */
             
         }
 
-        /// TODO: fullSystem->blockUntilMappingIsFinished();
+        fullSystem->blockUntilMappingIsFinished();
 
         // End the stop watch:
         clock_t ended = clock();
@@ -550,8 +537,8 @@ int main(int argc, char **argv)
         gettimeofday(&tv_end, NULL);
 
         // Statistics: Useful for data analysis
-        /// TODO: fullSystem->printResult(output_file, true);
-        /// TODO: fullSystem->printResult(output_file + ".noloop", false);
+        fullSystem->printResult(output_file, true);
+        fullSystem->printResult(output_file + ".noloop", false);
 
 
         int numFramesProcessed = abs(idsToPlay[0] - idsToPlay.back());
@@ -566,11 +553,7 @@ int main(int argc, char **argv)
         << endl << 1000 / (MilliSecondsTakenSingle / numFramesProcessed) << "x (single core);" 
         << endl << 1000 / (MilliSecondsTakenMT / numFramesProcessed) << "x (multi core);" 
         << endl << "===============" << endl;
-        /* TODO: (SegmentationFault)
-        */
-
-        /* TODO: 
-        */
+        
         if(setting_logStuff)
         {
             std::ofstream tmlog;
@@ -581,20 +564,16 @@ int main(int argc, char **argv)
             tmlog.close();
         }
         
-
-
     });
 
-    /* TODO: 
     if(viewer)
     {
         viewer->run(); // mac os should keep this in main thread.
     }
-    */
 
     runthread.join(); // This will take a while...
 
-    // TODO: viewer->saveAsPLYFile("./pointcloud.ply");
+    viewer->saveAsPLYFile("./pointcloud.ply");
     LOG(INFO) << "EXIT NOW!";
     
     return 0;

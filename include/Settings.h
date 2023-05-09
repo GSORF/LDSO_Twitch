@@ -32,6 +32,16 @@ namespace ldso {
     const float SCALE_A = 10.0f;        // (I think) one of two photometric parameters
     const float SCALE_B = 1000.0f;        // (I think) one of two photometric parameters
 
+    // inverse version
+    const float SCALE_IDEPTH_INVERSE = (1.0f / SCALE_IDEPTH);
+    const float SCALE_XI_ROT_INVERSE = (1.0f / SCALE_XI_ROT);
+    const float SCALE_XI_TRANS_INVERSE = (1.0f / SCALE_XI_TRANS);
+    const float SCALE_F_INVERSE = (1.0f / SCALE_F);
+    const float SCALE_C_INVERSE = (1.0f / SCALE_C);
+    const float SCALE_W_INVERSE = (1.0f / SCALE_W);
+    const float SCALE_A_INVERSE = (1.0f / SCALE_A);
+    const float SCALE_B_INVERSE = (1.0f / SCALE_B);
+
     // the detail setting variables
     extern int pyrLevelsUsed;
     extern float setting_keyframesPerSecond;
@@ -79,7 +89,7 @@ namespace ldso {
     extern int setting_killOverexposedMode;
     extern int setting_pattern; // This is one of 10 implemented residual patterns (see below)
 
-    extern float setting_marWeightFac;
+    extern float setting_margWeightFac;
     extern int setting_discreteSearchItsOnPointActivation; // CHANGE by LwTV (Seach = Search)
     extern int setting_GNItsOnPointActivation;
 

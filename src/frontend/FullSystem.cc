@@ -41,7 +41,7 @@ namespace ldso
 
         Hcalib->CreateCH(Hcalib); // Create CalibHessian (CH)
         lastCoarseRMSE.setConstant(100); // Initialize Vec5(100,100,100,100,100)
-        ef->red = &this->threadReduce // red = Reduce (used in multithreading)
+        ef->red = &this->threadReduce; // red = Reduce (used in multithreading)
         mappingThread = thread(&FullSystem::mappingLoop, this);
 
         pixelSelector = shared_ptr<PixelSelector>(new PixelSelector(wG[0], hG[0]));
@@ -347,7 +347,7 @@ namespace ldso
             SE3 lastF_2_fh_this = lastF_2_fh_tries[i];
 
             // use coarse tracker to solve the iteration
-            bool trackingIsGood = coarseTracker->trackNewestCoarse(fh, last_F_2_fh_this, aff_g2l_this, pyrLevelsUsed - 1, achievedRes); // Each level has to be at least as good as the last try.
+            bool trackingIsGood = coarseTracker->trackNewestCoarse(fh, lastF_2_fh_this, aff_g2l_this, pyrLevelsUsed - 1, achievedRes); // Each level has to be at least as good as the last try.
             tryIterations++;
 
             // do we have a new winner?
@@ -445,8 +445,8 @@ namespace ldso
 
         {
             unique_lock<mutex> crlock(shellPoseMutex);
-            fh->setEvalPT_scaled(fh->getPose(), fh->frame->aff_g2l);
-            fh->frame->setPoseOpti(Sim3(fh->frame->getPose().matrix));
+            fh->setEvalPT_scaled(fh->frame->getPose(), fh->frame->aff_g2l);
+            fh->frame->setPoseOpti(Sim3(fh->frame->getPose().matrix()));
         }
 
         LOG(INFO) << "frame " << fh->frame->id << " is marked as key frame, active keyframes: " << frames.size() << endl;
@@ -565,7 +565,7 @@ namespace ldso
             ef->lastNullspaces_pose,
             ef->lastNullspaces_scale,
             ef->lastNullspaces_affA,
-            ef->lastNullspaces_affB,
+            ef->lastNullspaces_affB
         );
 
         ef->marginalizePointsF();
@@ -798,7 +798,7 @@ namespace ldso
                     if(ffh.target.lock()->frameID > latest->frameHessian->frameID - setting_minFrameAge + 1
                     || ffh.target.lock() == ffh.host.lock())
                     {
-                        continue
+                        continue;
                     }
                     distScore += 1 / (1e-5 + ffh.distanceLL);
                 }
@@ -813,7 +813,7 @@ namespace ldso
 
             if(toMarginalize)
             {
-                toMarginalize->frameHessian->flaggedForMaginalization = true;
+                toMarginalize->frameHessian->flaggedForMarginalization = true;
                 LOG(INFO) << "frame " << toMarginalize->kfId << " is set as marged" << std::endl;
                 flagged++;
             }
@@ -862,7 +862,7 @@ namespace ldso
                         }
                     }
                 }
-                numPoints++
+                numPoints++;
             }
         }
 
@@ -1046,7 +1046,7 @@ namespace ldso
                 residuals[nres]->state_NewState = ResState::OUTLIER;
                 residuals[nres]->state_state = ResState::IN;
                 residuals[nres]->target = fr->frameHessian;
-                nres++
+                nres++;
             }
         }
         assert(nres == frames.size() - 1);
@@ -1300,7 +1300,7 @@ namespace ldso
         vector<shared_ptr<FrameHessian>> frameHessians;
         for (auto fr : frames)
         {
-            frameHessian.push_back(fr->frameHessian);
+            frameHessians.push_back(fr->frameHessian);
         }
 
         // make dist map
@@ -1386,7 +1386,7 @@ namespace ldso
         }
 
         vector<shared_ptr<PointHessian>> optimized;
-        optimized.resize(toOptimize.size())
+        optimized.resize(toOptimize.size());
 
         // this will actually turn immature points into point hessians
         if(multiThreading)
@@ -1420,8 +1420,8 @@ namespace ldso
             }
             else if(newpoint == nullptr || ph->lastTraceStatus == IPS_OOB)
             {
-                ph->feature-status = Feature::FeatureStatus::OUTLIER;
-                ph->feature-ReleaseImmature();
+                ph->feature->status = Feature::FeatureStatus::OUTLIER;
+                ph->feature->ReleaseImmature();
             }
         }
     }
@@ -1580,7 +1580,7 @@ namespace ldso
                 int x = rng.uniform(20, wG[0] - 20);
                 int y = rng.uniform(20, hG[0] - 20);
 
-                shared_ptr<Feature> feat(new Feature(x, y, newFrame-frame));
+                shared_ptr<Feature> feat(new Feature(x, y, newFrame->frame));
                 feat->ip = shared_ptr<ImmaturePoint>(new ImmaturePoint(newFrame->frame, feat, 1, Hcalib->mpCH));
                 if(!std::isfinite(feat->ip->energyTH))
                 {
@@ -1687,7 +1687,7 @@ namespace ldso
                     shared_ptr<PointHessian> ph = feat->point->mpPH;
                     if(ph->residuals.empty())
                     {
-                        ph->point-status = Point::PointStatus::OUTLIER;
+                        ph->point->status = Point::PointStatus::OUTLIER;
                         feat->status = Feature::FeatureStatus::OUTLIER;
                         numPointsDropped++;
                     }
@@ -1719,7 +1719,7 @@ namespace ldso
             ef->lastNullspaces_pose,
             ef->lastNullspaces_scale,
             ef->lastNullspaces_affA,
-            ef->lastNullspaces_affB,
+            ef->lastNullspaces_affB
         );
         ef->solveSystemF(iteration, lambda, Hcalib->mpCH);
     }
@@ -1761,7 +1761,7 @@ namespace ldso
                 }
                 else if(ph->lastResiduals[1].first == r)
                 {
-                    ph->lastResidual[1].second = r->state_state;
+                    ph->lastResiduals[1].second = r->state_state;
                 }
             }
             int nResRemoved = 0;
@@ -1776,7 +1776,7 @@ namespace ldso
                     }
                     else if(ph->lastResiduals[1].first == r)
                     {
-                        ph->lastResidual[1].first = 0;
+                        ph->lastResiduals[1].first = 0;
                     }
 
                     ef->dropResidual(r); // this will actually remove the residual
@@ -1970,7 +1970,7 @@ namespace ldso
                 /// TODO: feat should be &feat I believe... (because it is used as a reference below)
                 for (auto feat : fr->features)
                 {
-                    if(feat-status == Feature::FeatureStatus::VALID &&
+                    if(feat->status == Feature::FeatureStatus::VALID &&
                     feat->point->status == Point::PointStatus::ACTIVE)
                     {
                         auto ph = feat->point->mpPH;
@@ -2035,7 +2035,7 @@ namespace ldso
     std::vector<VecX> FullSystem::getNullspaces(std::vector<VecX> &nullspaces_pose,
     std::vector<VecX> &nullspaces_scale,
     std::vector<VecX> &nullspaces_affA,
-    std::vector<VecX> &nullspaces_affB,)
+    std::vector<VecX> &nullspaces_affB)
     {
         nullspaces_pose.clear();
         nullspaces_scale.clear();
@@ -2173,7 +2173,7 @@ namespace ldso
             // get an unmapped frame, tackle it.
             shared_ptr<Frame> fr = unmappedTrackedFrames.front();
             auto fh = fr->frameHessian;
-            unmappedTrackedFrames.pop_front()
+            unmappedTrackedFrames.pop_front();
 
             // guaranteed to make a KF for the very first two tracked frames.
             if(globalMap->NumFrames() <= 2)
@@ -2316,7 +2316,7 @@ namespace ldso
             {
                 Twc = fr->getPose().inverse();
             }
-            myfile << fr->timestamp <<
+            myfile << fr->timeStamp <<
             " " << Twc.translation().transpose() <<
             " " << Twc.so3().unit_quaternion().x() <<
             " " << Twc.so3().unit_quaternion().y() <<

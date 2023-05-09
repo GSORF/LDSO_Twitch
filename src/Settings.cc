@@ -57,7 +57,7 @@ namespace ldso {
     int setting_killOverexposedMode = 0;
     int setting_pattern = 8; // This is one of 10 implemented residual patterns (see below)
 
-    float setting_marWeightFac = 0.5 * 0.5;
+    float setting_margWeightFac = 0.5 * 0.5;
     int setting_discreteSearchItsOnPointActivation = 0; // CHANGE by LwTV (Seach = Search)
     int setting_GNItsOnPointActivation = 3;
 
