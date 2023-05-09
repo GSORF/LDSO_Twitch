@@ -1,4 +1,7 @@
 # LDSO_Twitch
+
+![Alt Text](LDSO_Twitch_Animation.gif)
+
 Repository for twitch livestream where I dissect the LDSO for educational purpose
 
 # Livestream and Videos
