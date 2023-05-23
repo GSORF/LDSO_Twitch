@@ -101,6 +101,8 @@ namespace ldso {
             glColor3f(color[0], color[1], color[2]);
 
         glLineWidth(lineWidth);
+
+        // Draw camera frustum
         glBegin(GL_LINES);
         glVertex3f(0, 0, 0);
         glVertex3f(sz * (0 - cx) / fx, sz * (0 - cy) / fy, sz);
@@ -122,8 +124,23 @@ namespace ldso {
 
         glVertex3f(sz * (0 - cx) / fx, sz * (0 - cy) / fy, sz);
         glVertex3f(sz * (width - 1 - cx) / fx, sz * (0 - cy) / fy, sz);
-
         glEnd();
+
+        // Draw camera coordinate axes
+        glBegin(GL_LINES);
+        glColor3f(1, 0, 0); // x-axis should be red
+        glVertex3f(0, 0, 0);
+        glVertex3f(sz, 0, 0);
+
+        glColor3f(0, 1, 0); // y-axis should be green
+        glVertex3f(0, 0, 0);
+        glVertex3f(0, sz, 0);
+
+        glColor3f(0, 0, 1); // z-axis should be blue
+        glVertex3f(0, 0, 0);
+        glVertex3f(0, 0, sz);
+        glEnd();
+
         glPopMatrix();
     }
 
@@ -293,6 +310,7 @@ namespace ldso {
 
     void KeyFrameDisplay::save(ofstream &of) {
         Sophus::Sim3f Swc;
+        // Associated frame (world2camera transformation), only set by SetFromF() method
         if (originFrame) {
             Swc = originFrame->getPoseOpti().inverse().cast<float>();
         } else {
@@ -303,10 +321,10 @@ namespace ldso {
             if (originalInputSparse[i].idpeth <= 0) continue;
             float depth = 1.0f / (originalInputSparse[i].idpeth);
 
-            float x = (originalInputSparse[i].u * fxi + cxi) * depth;
-            float y = (originalInputSparse[i].v * fyi + cyi) * depth;
-            float z = depth;
-            Vec3f pw = Swc * Vec3f(x, y, z);
+            float x = (originalInputSparse[i].u * fxi + cxi) * depth; // Image to camera space conversion
+            float y = (originalInputSparse[i].v * fyi + cyi) * depth; // Image to camera space conversion
+            float z = depth; // Image to camera space conversion
+            Vec3f pw = Swc * Vec3f(x, y, z); // Camera space to world space conversion
             of << pw[0] << " " << pw[1] << " " << pw[2] << endl;
         }
     }
@@ -340,7 +358,7 @@ namespace ldso {
 
     void PangolinDSOViewer::run() {
 
-        pangolin::CreateWindowAndBind("Main", 2 * w, 2 * h);
+        pangolin::CreateWindowAndBind("LDSO Twitch", 2 * w, 2 * h);
         LOG(INFO) << "Create Pangolin DSO viewer" << endl;
         const int UI_WIDTH = 180;
 
@@ -352,15 +370,18 @@ namespace ldso {
             pangolin::ModelViewLookAt(-0, -5, -10, 0, 0, 0, pangolin::AxisNegY)
         );
 
+        // 3D display region
         pangolin::View &Visualization3D_display = pangolin::CreateDisplay()
             .SetBounds(0.0, 1.0, pangolin::Attach::Pix(UI_WIDTH), 1.0, -w / (float) h)
             .SetHandler(new pangolin::Handler3D(Visualization3D_camera));
 
+        // Setup the video display
         pangolin::View &d_video = pangolin::Display("imgVideo")
             .SetAspect(w / (float) h);
 
         pangolin::GlTexture texVideo(w, h, GL_RGB, false, 0, GL_RGB, GL_UNSIGNED_BYTE);
 
+        // Video display region
         pangolin::CreateDisplay()
             .SetBounds(0.0, 0.3, pangolin::Attach::Pix(UI_WIDTH), 1.0)
             .SetLayout(pangolin::LayoutEqual)
@@ -377,6 +398,9 @@ namespace ldso {
         pangolin::Var<bool> settings_showActiveConstraints("ui.ActiveConst", true, true);
         pangolin::Var<bool> settings_showAllConstraints("ui.AllConst", false, true);
 
+        pangolin::Var<bool> setting_render_worldCoordinateSystem("ui.WorldCS", true, true);
+        pangolin::Var<bool> setting_render_worldGrid("ui.WorldGrid", true, true);
+        
         pangolin::Var<bool> settings_show3D("ui.show3D", true, true);
         pangolin::Var<bool> settings_showLiveDepth("ui.showDepth", true, true);
         pangolin::Var<bool> settings_showLiveVideo("ui.showVideo", true, true);
@@ -401,6 +425,7 @@ namespace ldso {
 
         pangolin::Var<double> settings_trackFps("ui.Track fps", 0, 0, 0, false);
         pangolin::Var<double> settings_mapFps("ui.KF fps", 0, 0, 0, false);
+        pangolin::Var<int> settings_frameID("ui.Frame ID", 0, 0, 0, false);
 
 
         // Default hooks for exiting (Esc) and fullscreen (tab).
@@ -409,6 +434,47 @@ namespace ldso {
             // Clear entire screen
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+
+
+            if (setting_render_worldCoordinateSystem) {
+                // Draw world coordinate axes
+                glLineWidth(3);
+                glBegin(GL_LINES);
+                glColor3f(1, 0, 0); // x-axis should be red
+                glVertex3f(0, 0, 0);
+                glVertex3f(1, 0, 0);
+
+                glColor3f(0, 1, 0); // y-axis should be green
+                glVertex3f(0, 0, 0);
+                glVertex3f(0, 1, 0);
+
+                glColor3f(0, 0, 1); // z-axis should be blue
+                glVertex3f(0, 0, 0);
+                glVertex3f(0, 0, 1);
+                glEnd();
+            }
+
+            if(setting_render_worldGrid)
+            {
+                glLineWidth(3);
+                glBegin(GL_LINES);
+                glColor3f(0, 0, 0); // black grid
+                size_t xsize = 10;
+                size_t ysize = 10;
+
+                for (size_t x = -xsize/2; x < xsize/2; x++)
+                {
+                    glVertex3f(x, -ysize/2, 0);
+                    glVertex3f(x, ysize/2, 0);
+                }
+                for (size_t y = -ysize/2; y < ysize/2; y++)
+                {
+                    glVertex3f(y, -xsize/2, 0);
+                    glVertex3f(y, xsize/2, 0);
+                }
+                glEnd();
+
+            }
 
             if (setting_render_display3D) {
 
@@ -514,6 +580,21 @@ namespace ldso {
                 settings_trackFps = lastNTrackingMs.size() * 1000.0f / sd;
                 model3DMutex.unlock();
             }
+
+            // Update the current image index in the User Interface:
+            {
+                // Note: The current cam is not available in the viewer unless the fullSystem is initialized!
+                if(currentCam)
+                {
+                    settings_frameID = currentCam.get()->id;
+                }
+                // Useable data structures (for reference, TODO: delete later)
+                //shared_ptr<KeyFrameDisplay> currentCam = nullptr;
+                //std::vector<shared_ptr<KeyFrameDisplay>> keyframes; // all keyframes
+                //std::vector<size_t> activeKFIDs;    // active keyframes's IDs
+            }
+
+
 
             // video image
             {
@@ -669,7 +750,7 @@ namespace ldso {
         for (auto kf: keyframes) {
             cnt_points += kf->numPoints();
         }
-        // header
+        // write header
         fout << "ply" << endl << "format ascii 1.0" << endl
              << "element vertex " << cnt_points << endl
              << "property float x" << endl
@@ -677,6 +758,7 @@ namespace ldso {
              << "property float z" << endl
              << "end_header" << endl;
 
+        // write point cloud data (x, y, z) - this is implemented in the Keyframe data structure
         for (auto kf: keyframes) {
             kf->save(fout);
         }

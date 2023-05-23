@@ -1033,7 +1033,6 @@ namespace ldso {
         else if(std::sscanf(l3.c_str(), "%f %f %f %f %f", 
         &outputCalibration[0], &outputCalibration[1], &outputCalibration[2], &outputCalibration[3], &outputCalibration[4]) == 5)
         {
-            outputCalibration[0] = -2;
             std::cout << "Out: " << outputCalibration[0] << " "
                                  << outputCalibration[1] << " "
                                  << outputCalibration[2] << " "

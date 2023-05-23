@@ -27,13 +27,13 @@ namespace ldso {
      */
     template<int ppp>
     struct InputPointSparse {
-        float u = 0;
-        float v = 0;
-        float idpeth = 0;
+        float u = 0; // horizontal pixel coordinate (u)
+        float v = 0; // vertical pixel coordinate (v)
+        float idpeth = 0; // inverse depth (m, falsely scaled) 
         float idepth_hessian = 0;
-        float relObsBaseline = 0;
-        int numGoodRes = 0;
-        unsigned char color[ppp];
+        float relObsBaseline = 0; // baseline between two cameras (m, falsely scaled)
+        int numGoodRes = 0; // count of "good" residuals
+        unsigned char color[ppp]; // grayscale value between [0...255] (2⁸ bits, or one byte)
         unsigned char status = 0;
     };
 
@@ -48,11 +48,11 @@ namespace ldso {
                 delete[] originalInputSparse;
         }
 
-        // copies points from KF over to internal buffer,
+        // copies points from KF (FrameHessian) over to internal buffer,
         // keeping some additional information so we can render it differently.
         void setFromKF(shared_ptr<FrameHessian> fh, shared_ptr<CalibHessian> HCalib);
 
-        // copies points from KF over to internal buffer,
+        // copies points from Frame over to internal buffer,
         // keeping some additional information so we can render it differently.
         void setFromF(shared_ptr<Frame> fs, shared_ptr<CalibHessian> HCalib);
 

@@ -5,7 +5,10 @@
         "type": "cppdbg",
         "request": "launch",
         "program": "${workspaceFolder}/bin/run_ldso_twitch_tum_mono",
-        "args": ["preset=0", "files=../../../VSLAM_Datasets/sequence_45/images.zip", "vignette=../../../VSLAM_Datasets/sequence_45/vignette.png", "calib=../../../VSLAM_Datasets/sequence_45/camera.txt", "vocab=../vocab/orbvoc.dbow3", "gamma=../../../VSLAM_Datasets/sequence_45/pcalib.txt"], // IMPORTANT!!!
+        //"args": ["preset=0", "files=../../../VSLAM_Datasets/sequence_45/images.zip", "vignette=../../../VSLAM_Datasets/sequence_45/vignette.png", "calib=../../../VSLAM_Datasets/sequence_45/camera.txt", "vocab=../vocab/orbvoc.dbow3", "gamma=../../../VSLAM_Datasets/sequence_45/pcalib.txt"], // IMPORTANT!!!
+        "args": ["preset=0", "files=../../../VSLAM_Datasets/sequence_02/images", "vignette=../../../VSLAM_Datasets/sequence_02/vignette.png", "calib=../../../VSLAM_Datasets/sequence_02/camera.txt", "vocab=../vocab/orbvoc.dbow3", "gamma=../../../VSLAM_Datasets/sequence_02/pcalib.txt"], // IMPORTANT!!!
+        //"args": ["preset=0", "mode=1", "files=../../../VSLAM_Datasets/mysequence/images_jpg", "vignette=../../../VSLAM_Datasets/mysequence/vignette.png", "calib=../../../VSLAM_Datasets/mysequence/camera.txt", "vocab=../vocab/orbvoc.dbow3", "gamma=../../../VSLAM_Datasets/mysequence/pcalib.txt"], // IMPORTANT!!!
+        //"args": ["preset=0", "mode=1", "files=../../../VSLAM_Datasets/gvins/1661703803436_measurement_28-8-2022_18-23-23", "vignette=../../../VSLAM_Datasets/gvins/vignette.png", "calib=../../../VSLAM_Datasets/gvins/camera.txt", "vocab=../vocab/orbvoc.dbow3", "gamma=../../../VSLAM_Datasets/gvins/pcalib.txt"], // IMPORTANT!!!
         "stopAtEntry": true,
         "cwd": "${fileDirname}",
         "environment": [],
