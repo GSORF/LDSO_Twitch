@@ -1,13 +1,12 @@
 # LDSO_Twitch
 
-![Alt Text](./_github/LDSO_Twitch_Animation.gif)
+![Animation showing the beginning of a sucessfully running LDSO implementation](./_github/LDSO_Twitch_Animation.gif)
 
 Repository for twitch livestream where I dissect the LDSO for educational purpose.
 
 This is a coarse LDSO architecture overview which I have created during the livestream:
 
-![Alt text](./_github/LDSO_Flowchart_Coarse.svg)
-<img src="./_github/LDSO_Flowchart_Coarse.svg">
+![Flowchart depicting a rough interplay of input, processing and output in the LDSO](./_github/LDSO_Flowchart_Coarse.svg)
 
 
 # Livestream and Videos
