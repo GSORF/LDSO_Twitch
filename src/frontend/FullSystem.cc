@@ -323,6 +323,24 @@ namespace ldso
                 SE3(Sophus::Quaterniond(1, rotDelta, rotDelta, rotDelta), Vec3(0,0,0))); // assume constant motion.
             }
 
+            // Loop over all initial motion hypotheses and write to a .txt file
+            std::ofstream fileInitTries("../frame" + std::to_string(fh->frame->id) + std::string("_initialTries.txt"));
+            fileInitTries << std::setprecision(15);
+            int poseID = 0;
+            for(SE3 pose : lastF_2_fh_tries)
+            {
+                fileInitTries << poseID <<
+                " " << pose.translation().transpose() <<
+                " " << pose.so3().unit_quaternion().x() <<
+                " " << pose.so3().unit_quaternion().y() <<
+                " " << pose.so3().unit_quaternion().z() <<
+                " " << pose.so3().unit_quaternion().w() << "\n";
+                poseID++;
+            }
+            fileInitTries.close();
+            // End of saving initial motion hypotheses to .txt file
+
+
             if(!slast->poseValid || !sprelast->poseValid || !lastF->frame->poseValid)
             {
                 lastF_2_fh_tries.clear(); // delete motion hypotheses from above
@@ -341,6 +359,11 @@ namespace ldso
         Vec5 achievedRes = Vec5::Constant(NAN);
         bool haveOneGood = false;
         int tryIterations = 0;
+
+        // open a .txt-file to save optimized poses
+        std::ofstream fileOptimizedTries("../frame" + std::to_string(fh->frame->id) + std::string("_optimizedTries.txt"));
+        fileOptimizedTries << std::setprecision(15);
+
         for (unsigned int i = 0; i < lastF_2_fh_tries.size(); i++)
         {
             AffLight aff_g2l_this = aff_last_2_l;
@@ -349,6 +372,32 @@ namespace ldso
             // use coarse tracker to solve the iteration
             bool trackingIsGood = coarseTracker->trackNewestCoarse(fh, lastF_2_fh_this, aff_g2l_this, pyrLevelsUsed - 1, achievedRes); // Each level has to be at least as good as the last try.
             tryIterations++;
+
+            // write tracking result to file for current motion hypothesis
+            SE3 pose = lastF->frame->getPose(); // lastF is a reference to "coarseTracker->lastRef"
+            fileOptimizedTries << i <<
+            " " << pose.translation().transpose() <<
+            " " << pose.so3().unit_quaternion().x() <<
+            " " << pose.so3().unit_quaternion().y() <<
+            " " << pose.so3().unit_quaternion().z() <<
+            " " << pose.so3().unit_quaternion().w() << 
+
+            " " << coarseTracker->firstCoarseRMSE << 
+            
+            " " << coarseTracker->lastResiduals[1] << 
+            " " << coarseTracker->lastResiduals[2] << 
+            " " << coarseTracker->lastResiduals[3] << 
+            " " << coarseTracker->lastResiduals[4] << 
+
+            " " << coarseTracker->lastFlowIndicators[0] << 
+            " " << coarseTracker->lastFlowIndicators[1] << 
+            " " << coarseTracker->lastFlowIndicators[2] << 
+
+            " " << aff_g2l_this.a <<   // a
+            " " << aff_g2l_this.b <<   // b
+            
+            "\n";
+
 
             // do we have a new winner?
             if(trackingIsGood && std::isfinite((float) coarseTracker->lastResiduals[0]) && !(coarseTracker->lastResiduals[0] >= achievedRes[0]))
@@ -362,7 +411,8 @@ namespace ldso
             // take over achieved res (always).
             if(haveOneGood)
             {
-                /// TOOD: Replace "5" with achievedRes.size()
+                /// TODO: Replace "5" with achievedRes.size()
+                /// TODO: Possible shadowing of interation variable "i" (from motion hypothesis loop above)
                 for (int i = 0; i < 5; i++)
                 {
                     if(!std::isfinite((float) achievedRes[i]) || achievedRes[i] > coarseTracker->lastResiduals[i])
@@ -373,12 +423,19 @@ namespace ldso
                 }
             }
 
+            /*
+            // Commented out in order to optimize ALL poses:
+
             if(haveOneGood && achievedRes[0] < lastCoarseRMSE[0] * setting_reTrackThreshold)
             {
                 break;
             }
+            */
 
         }
+        fileOptimizedTries.close();
+        // End of saving optimized motion hypotheses to .txt file
+
 
         if(!haveOneGood)
         {

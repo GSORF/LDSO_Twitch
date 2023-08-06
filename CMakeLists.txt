@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.12)
 project(ldso_twitch)
 
 # Check for the Build Type and set it if necessary
@@ -39,6 +39,10 @@ set(CMAKE_CXX_FLAGS "-Wall -Wno-deprecated -march=native -Wno-duplicate-decl-spe
 if(NOT APPLE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 endif()
+
+# Set number of maximum concurrent processes to use when building
+set(CMAKE_BUILD_PARALLEL_LEVEL 2)
+
 
 # Decision if we have ZipLib:
 if(LIBZIP_LIBRARY)

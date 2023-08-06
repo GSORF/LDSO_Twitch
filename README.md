@@ -1,8 +1,14 @@
 # LDSO_Twitch
 
-![Alt Text](LDSO_Twitch_Animation.gif)
+![Alt Text](./_github/LDSO_Twitch_Animation.gif)
 
-Repository for twitch livestream where I dissect the LDSO for educational purpose
+Repository for twitch livestream where I dissect the LDSO for educational purpose.
+
+This is a coarse LDSO architecture overview which I have created during the livestream:
+
+![Alt text](./_github/LDSO_Flowchart_Coarse.svg)
+<img src="./_github/LDSO_Flowchart_Coarse.svg">
+
 
 # Livestream and Videos
 
